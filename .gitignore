@@ -158,6 +158,8 @@ venv.bak/
 .mypy_cache/
 .dmypy.json
 dmypy.json
+config.json
+catalog.json
 
 # Pyre type checker
 .pyre/
@@ -205,3 +207,4 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+*.csv

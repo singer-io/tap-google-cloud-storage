@@ -1,0 +1,14 @@
+{
+  "type": "service_account",
+  "project_id": "my-gcp-project",
+  "private_key_id": "123abc456def...",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEv...END PRIVATE KEY-----\n",
+  "client_email": "my-service-account@my-gcp-project.iam.gserviceaccount.com",
+  "client_id": "12345678901234567890",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/my-service-account%40my-gcp-project.iam.gserviceaccount.com",
+  "bucket": "my-gcs-bucket",
+  "tables": "[{\"search_prefix\":\"exports\",\"search_pattern\":\"my_table\\\\/.*\\\\.csv\",\"table_name\":\"my_table\",\"key_properties\":\"id\",\"date_overrides\":\"created_at\",\"delimiter\":\",\"}]"
+}
