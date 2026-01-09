@@ -5,7 +5,12 @@ import json
 import re
 import singer
 from google.cloud import storage
-from singer_encodings import csv as singer_csv
+from singer_encodings import (
+    csv as singer_csv,
+    jsonl as singer_jsonl,
+    parquet as singer_parquet,
+    avro as singer_avro,
+)
 from tap_google_cloud_storage import conversion as conversion  # type: ignore
 
 LOGGER = singer.get_logger()
@@ -87,14 +92,9 @@ def _get_records_for_csv(gcs_path, sample_rate, buffer, table_spec):
 
 def _get_records_for_jsonl(sample_rate, data_bytes):
     current_row = 0
-    for line in data_bytes.splitlines():
-        if (current_row % sample_rate) == 0:
-            decoded = line.decode('utf-8') if isinstance(line, (bytes, bytearray)) else line
-            if decoded and decoded.strip():
-                try:
-                    yield json.loads(decoded)
-                except Exception:
-                    pass
+    for row in singer_jsonl.get_row_iterator(io.BytesIO(data_bytes)):
+        if (current_row % sample_rate) == 0 and isinstance(row, dict):
+            yield row
         current_row += 1
 
 
@@ -113,37 +113,15 @@ def _get_records_for_json(sample_rate, data_bytes):
 
 
 def _get_records_for_parquet(sample_rate, data_bytes):
-    try:
-        import pyarrow as pa  # type: ignore
-        import pyarrow.parquet as pq  # type: ignore
-    except Exception:
-        return
-    try:
-        table = pq.read_table(pa.BufferReader(data_bytes))
-    except Exception:
-        return
-    # Convert to batches and iterate rows with sample_rate
-    batches = table.to_batches()
     row_idx = 0
-    for batch in batches:
-        rows = batch.to_pylist()
-        for row in rows:
-            if (row_idx % sample_rate) == 0 and isinstance(row, dict):
-                yield row
-            row_idx += 1
+    for row in singer_parquet.get_row_iterator(io.BytesIO(data_bytes)):
+        if (row_idx % sample_rate) == 0 and isinstance(row, dict):
+            yield row
+        row_idx += 1
 
 
 def _get_records_for_avro(sample_rate, data_bytes):
-    try:
-        from fastavro import reader  # type: ignore
-    except Exception:
-        return
-    try:
-        bio = io.BytesIO(data_bytes)
-        avro_reader = reader(bio)
-    except Exception:
-        return
-    for idx, record in enumerate(avro_reader):
+    for idx, record in enumerate(singer_avro.get_row_iterator(io.BytesIO(data_bytes))):
         if (idx % sample_rate) == 0 and isinstance(record, dict):
             yield record
 
