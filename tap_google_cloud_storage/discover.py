@@ -1,18 +1,37 @@
+import singer
 from singer import metadata
 from tap_google_cloud_storage import gcs
 
+LOGGER = singer.get_logger()
 
 def discover_streams(config):
     streams = []
+    total = 0
+    skipped = []
 
     for table_spec in config.get('tables', []):
+        total += 1
         schema = discover_schema(config, table_spec)
+        # Skip this stream if no GCS objects matched the spec
+        if schema is None:
+            LOGGER.info(
+                'No objects matched for table "%s" (prefix="%s", pattern="%s"). Skipping.',
+                table_spec.get('table_name'),
+                table_spec.get('search_prefix', ''),
+                table_spec.get('search_pattern', '')
+            )
+            skipped.append(table_spec.get('table_name'))
+            continue
         streams.append({
             'stream': table_spec['table_name'],
             'tap_stream_id': table_spec['table_name'],
             'schema': schema,
             'metadata': load_metadata(table_spec, schema)
         })
+
+    LOGGER.info('Discovery summary: configured=%d, included=%d, skipped=%d%s',
+                total, len(streams), len(skipped),
+                (f" (skipped: {', '.join(skipped)})" if skipped else ''))
     return streams
 
 

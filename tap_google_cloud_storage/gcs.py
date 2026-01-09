@@ -36,12 +36,11 @@ def list_files_in_bucket(config):
     """
     client = setup_gcs_client(config)
     bucket_name = config.get("bucket")
-    LOGGER.info("Listing files in bucket: %s", bucket_name)
+    prefix = config.get("root_path", "")
+    LOGGER.info("Listing files in bucket: %s (prefix=%s)", bucket_name, prefix or "<none>")
     if not bucket_name:
         LOGGER.error("Bucket not found in config")
         raise ValueError("Bucket not found in config")
-
-    prefix = config.get("root_path", "")
 
     bucket = client.bucket(bucket_name)
 
@@ -99,13 +98,65 @@ def _get_records_for_jsonl(sample_rate, data_bytes):
         current_row += 1
 
 
+def _get_records_for_json(sample_rate, data_bytes):
+    try:
+        loaded = json.loads(data_bytes.decode('utf-8'))
+    except Exception:
+        return
+    if isinstance(loaded, list):
+        for idx, item in enumerate(loaded):
+            if (idx % sample_rate) == 0 and isinstance(item, dict):
+                yield item
+    elif isinstance(loaded, dict):
+        # Single JSON object; yield as one sample
+        yield loaded
+
+
+def _get_records_for_parquet(sample_rate, data_bytes):
+    try:
+        import pyarrow as pa  # type: ignore
+        import pyarrow.parquet as pq  # type: ignore
+    except Exception:
+        return
+    try:
+        table = pq.read_table(pa.BufferReader(data_bytes))
+    except Exception:
+        return
+    # Convert to batches and iterate rows with sample_rate
+    batches = table.to_batches()
+    row_idx = 0
+    for batch in batches:
+        rows = batch.to_pylist()
+        for row in rows:
+            if (row_idx % sample_rate) == 0 and isinstance(row, dict):
+                yield row
+            row_idx += 1
+
+
+def _get_records_for_avro(sample_rate, data_bytes):
+    try:
+        from fastavro import reader  # type: ignore
+    except Exception:
+        return
+    try:
+        bio = io.BytesIO(data_bytes)
+        avro_reader = reader(bio)
+    except Exception:
+        return
+    for idx, record in enumerate(avro_reader):
+        if (idx % sample_rate) == 0 and isinstance(record, dict):
+            yield record
+
+
 def get_sampled_schema_for_table(config, table_spec, max_files=10, sample_rate=100):
-    LOGGER.info('Sampling records to determine table schema.')
+    LOGGER.info('Sampling records to determine table schema for table "%s".', table_spec.get('table_name'))
 
     samples = []
     bucket_name = config.get('bucket')
+    found_any = False
 
     for idx, blob in enumerate(_iter_matching_blobs(config, table_spec)):
+        found_any = True
         if idx >= max_files:
             break
         name = blob.name
@@ -117,14 +168,37 @@ def get_sampled_schema_for_table(config, table_spec, max_files=10, sample_rate=1
             LOGGER.warning('Skipping %s due to download error: %s', name, e)
             continue
 
-        if lower.endswith('.csv') or lower.endswith('.txt'):
-            for rec in _get_records_for_csv(name, sample_rate, io.BytesIO(data), table_spec):
+        # Delimited text: CSV/TXT/TSV/PSV (default delimiters if none provided)
+        if lower.endswith('.csv') or lower.endswith('.txt') or lower.endswith('.tsv') or lower.endswith('.psv'):
+            # Clone table_spec to inject default delimiter if not provided
+            ts = dict(table_spec or {})
+            if 'delimiter' not in ts or ts.get('delimiter') in (None, ''):
+                if lower.endswith('.tsv'):
+                    ts['delimiter'] = '\t'
+                elif lower.endswith('.psv'):
+                    ts['delimiter'] = '|'
+                else:
+                    ts['delimiter'] = ','
+            for rec in _get_records_for_csv(name, sample_rate, io.BytesIO(data), ts):
                 samples.append(rec)
         elif lower.endswith('.jsonl'):
             for rec in _get_records_for_jsonl(sample_rate, data):
                 samples.append(rec)
+        elif lower.endswith('.json'):
+            for rec in _get_records_for_json(sample_rate, data):
+                samples.append(rec)
+        elif lower.endswith('.parquet'):
+            for rec in _get_records_for_parquet(sample_rate, data):
+                samples.append(rec)
+        elif lower.endswith('.avro'):
+            for rec in _get_records_for_avro(sample_rate, data):
+                samples.append(rec)
         else:
             LOGGER.warning('"%s" with unsupported extension for sampling; skipping', name)
+
+    # If no objects matched the configured prefix/pattern, signal caller to skip stream
+    if not found_any:
+        return None
 
     if not samples:
         return {

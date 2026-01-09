@@ -159,7 +159,7 @@ venv.bak/
 .dmypy.json
 dmypy.json
 config.json
-catalog.json
+catalog*.json
 
 # Pyre type checker
 .pyre/
