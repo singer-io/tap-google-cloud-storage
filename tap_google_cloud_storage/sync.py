@@ -1,243 +1,307 @@
-import singer
+import sys
+import csv
+import io
+import json
+import gzip
+
 from singer import metadata
+from singer import Transformer
 from singer import utils as singer_utils
+
+import singer
+from singer_encodings import (
+    avro,
+    compression,
+    csv as csv_helper,
+    jsonl,
+    parquet
+)
 from tap_google_cloud_storage import gcs
-from tap_google_cloud_storage.discover import discover_streams
 
 
 LOGGER = singer.get_logger()
+skipped_files_count = 0
 
 
-def _normalize_tables_in_config(config):
-    cfg = dict(config)
-    tables = cfg.get('tables', [])
-    if isinstance(tables, str):
-        import json
-        tables = json.loads(tables)
+def stream_is_selected(mdata_map):
+    return mdata_map.get((), {}).get('selected', False)
 
-    for table in tables:
-        search_prefix = table.get('search_prefix')
-        if search_prefix:
-            if search_prefix.startswith('/'):
-                table['search_prefix'] = search_prefix[1:]
+
+def sync_stream(config, state, table_spec, stream, sync_start_time):
+    table_name = table_spec['table_name']
+    modified_since = singer_utils.strptime_with_tz(
+        singer.get_bookmark(state, table_name, 'modified_since') or config['start_date']
+    )
+
+    LOGGER.info('Syncing table "%s".', table_name)
+    LOGGER.info('Getting files modified since %s.', modified_since)
+
+    gcs_files = get_input_files_for_table(config, table_spec, modified_since)
+
+    records_streamed = 0
+
+    for gcs_file in sorted(gcs_files, key=lambda item: item['last_modified']):
+        records_streamed += sync_table_file(config, gcs_file['key'], table_spec, stream)
+        if gcs_file['last_modified'] < sync_start_time:
+            state = singer.write_bookmark(state, table_name, 'modified_since', gcs_file['last_modified'].isoformat())
         else:
-            table.pop('search_prefix', None)
+            state = singer.write_bookmark(state, table_name, 'modified_since', sync_start_time.isoformat())
+        singer.write_state(state)
 
-        key_props = table.get('key_properties')
-        if key_props == "" or key_props is None:
-            table['key_properties'] = []
-        elif isinstance(key_props, str):
-            table['key_properties'] = [s.strip() for s in key_props.split(',')]
+    if skipped_files_count:
+        LOGGER.warn("%s files got skipped during the last sync.", skipped_files_count)
 
-        date_overrides = table.get('date_overrides')
-        if date_overrides == "" or date_overrides is None:
-            table['date_overrides'] = []
-        elif isinstance(date_overrides, str):
-            table['date_overrides'] = [s.strip() for s in date_overrides.split(',')]
+    LOGGER.info('Wrote %s records for table "%s".', records_streamed, table_name)
 
-    cfg['tables'] = tables
-    return cfg
+    return records_streamed
 
 
-def _parse_iso_to_ts(s):
+def get_input_files_for_table(config, table_spec, modified_since):
+    files = []
+    for blob in gcs._iter_matching_blobs(config, table_spec):
+        updated = getattr(blob, 'updated', None)
+        if not updated:
+            continue
+        if updated > modified_since:
+            files.append({
+                'key': blob.name,
+                'last_modified': updated
+            })
+    return files
+
+
+def _download_blob_bytes(config, gcs_path):
     try:
-        from datetime import datetime
-        if s.endswith('Z'):
-            s = s[:-1] + '+00:00'
-        return int(datetime.fromisoformat(s).timestamp())
-    except Exception:
+        client = gcs.setup_gcs_client(config)
+        bucket = client.bucket(config['bucket'])
+        blob = bucket.blob(gcs_path)
+        return blob.download_as_bytes()
+    except Exception as exc:
+        LOGGER.warning("Skipping %s file due to download error: %s", gcs_path, exc)
+        return None
+
+
+def sync_table_file(config, gcs_path, table_spec, stream):
+
+    extension = gcs_path.split(".")[-1].lower()
+
+    if not extension or gcs_path.lower() == extension:
+        LOGGER.warning('"%s" without extension will not be synced.', gcs_path)
+        global skipped_files_count
+        skipped_files_count = skipped_files_count + 1
+        return 0
+    try:
+        if extension == "zip" or extension == "gz":
+            return sync_compressed_file(config, gcs_path, table_spec, stream)
+        if extension in ["csv", "jsonl", "txt", "tsv", "psv", "parquet", "avro"]:
+            return handle_file(config, gcs_path, table_spec, stream, extension)
+        LOGGER.warning('"%s" having the ".%s" extension will not be synced.', gcs_path, extension)
+    except (UnicodeDecodeError, json.decoder.JSONDecodeError):
+        LOGGER.warning("Skipping %s file as parsing failed. Verify an extension of the file.", gcs_path)
+        skipped_files_count = skipped_files_count + 1
+    return 0
+
+
+def handle_file(config, gcs_path, table_spec, stream, extension, file_handler=None):
+    if not extension or gcs_path.lower() == extension:
+        LOGGER.warning('"%s" without extension will not be synced.', gcs_path)
+        global skipped_files_count
+        skipped_files_count = skipped_files_count + 1
+        return 0
+    if extension in ["csv", "txt", "tsv", "psv"]:
+        data = file_handler.read() if file_handler else _download_blob_bytes(config, gcs_path)
+        if data is None:
+            skipped_files_count = skipped_files_count + 1
+            return 0
+        file_handle = io.BytesIO(data)
+        return sync_csv_file(config, file_handle, gcs_path, table_spec, stream)
+
+    if extension == "parquet":
+        data = file_handler.read() if file_handler else _download_blob_bytes(config, gcs_path)
+        if data is None:
+            skipped_files_count = skipped_files_count + 1
+            return 0
+        file_handle = io.BytesIO(data)
+        return sync_parquet_file(config, file_handle, gcs_path, table_spec, stream)
+
+    if extension == "avro":
+        data = file_handler.read() if file_handler else _download_blob_bytes(config, gcs_path)
+        if data is None:
+            skipped_files_count = skipped_files_count + 1
+            return 0
+        file_handle = io.BytesIO(data)
+        return sync_avro_file(config, file_handle, gcs_path, table_spec, stream)
+
+    if extension == "jsonl":
+        data = file_handler.read() if file_handler else _download_blob_bytes(config, gcs_path)
+        if data is None:
+            skipped_files_count = skipped_files_count + 1
+            return 0
+        file_handle = io.BytesIO(data)
+        iterator = jsonl.get_row_iterator(file_handle)
+        records = sync_jsonl_file(config, iterator, gcs_path, table_spec, stream)
+        if records == 0:
+            skipped_files_count = skipped_files_count + 1
+            LOGGER.warning('Skipping "%s" file as it is empty', gcs_path)
+        return records
+
+    if extension == "zip" or extension == "gz":
+        return sync_compressed_file(config, gcs_path, table_spec, stream)
+
+    LOGGER.warning('"%s" having the ".%s" extension will not be synced.', gcs_path, extension)
+    skipped_files_count = skipped_files_count + 1
+    return 0
+
+
+def sync_compressed_file(config, gcs_path, table_spec, stream):
+    LOGGER.info('Syncing Compressed file "%s".', gcs_path)
+
+    records_streamed = 0
+    data = _download_blob_bytes(config, gcs_path)
+    if data is None:
         return 0
 
+    decompressed_files = compression.infer(io.BytesIO(data), gcs_path)
 
-def metadata_helpers_get_key_props(mdata_list):
-    for m in mdata_list or []:
-        if not m or 'breadcrumb' not in m:
-            continue
-        if m['breadcrumb'] == []:
-            props = m.get('metadata', {}).get('table-key-properties')
-            if props is None:
-                return []
-            return props
-    return []
+    for decompressed_file in decompressed_files:
+        extension = decompressed_file.name.split(".")[-1].lower()
 
+        if extension in ["csv", "jsonl", "gz", "txt", "tsv", "psv"]:
+            gcs_file_path = gcs_path + "/" + decompressed_file.name
+            records_streamed += handle_file(config, gcs_file_path, table_spec, stream, extension, file_handler=decompressed_file)
 
-def find_table_attr(cfg, stream_name, attr):
-    for t in cfg.get('tables', []):
-        if t.get('table_name') == stream_name:
-            return t.get(attr)
-    return None
+    return records_streamed
 
 
-def do_sync(config, state=None, catalog=None):
-    LOGGER.info("Starting sync")
-    cfg = _normalize_tables_in_config(config)
-    # Use provided catalog (with selections) if present; else discover
+def sync_csv_file(config, file_handle, gcs_path, table_spec, stream):
+    LOGGER.info('Syncing file "%s".', gcs_path)
+
+    bucket = config['bucket']
+    table_name = table_spec['table_name']
+
     try:
-        cat = catalog.to_dict() if (catalog and hasattr(catalog, 'to_dict')) else catalog
-        streams = cat.get('streams') if isinstance(cat, dict) else None
-    except Exception:
-        streams = None
-    streams = streams or discover_streams(cfg)
-    if not streams:
-        LOGGER.info("No streams to sync")
-        return
+        csv.field_size_limit(sys.maxsize)
+    except OverflowError:
+        # On Windows, C long may be 32-bit; fall back to max 32-bit int
+        csv.field_size_limit(2147483647)
 
-    state = state or {}
-    from datetime import datetime, timezone
-    sync_start_time = datetime.now(timezone.utc)
-
-    for stream in streams:
-        stream_name = stream['stream']
-        schema = stream['schema']
-        key_props = metadata_helpers_get_key_props(stream.get('metadata', []))
-        mdata_map = metadata.to_map(stream.get('metadata', []))
-        selected_flag = (
-            mdata_map.get((), {}).get('selected', False) or
-            stream.get('selected', False)
-        )
-        if not selected_flag:
-            LOGGER.info("%s: Skipping - not selected", stream_name)
-            continue
-
-        singer.write_state(state)
-        singer.write_schema(stream_name, schema, key_props)
-        row_count = 0
-        table_spec = {
-            'table_name': stream_name,
-            'search_prefix': find_table_attr(cfg, stream_name, 'search_prefix'),
-            'search_pattern': find_table_attr(cfg, stream_name, 'search_pattern'),
-            'delimiter': find_table_attr(cfg, stream_name, 'delimiter'),
-            'date_overrides': find_table_attr(cfg, stream_name, 'date_overrides'),
-            'key_properties': key_props,
-        }
-
-        # Determine replication key (record-level) from metadata, else fallback to file-level
-        mdata_map = metadata.to_map(stream.get('metadata', []))
-        replication_key = (
-            mdata_map.get((), {}).get('replication-key') or
-            mdata_map.get((), {}).get('replication_key')
-        )
-
-        def _parse_iso_maybe_z(s: str):
-            if not s:
-                return None
-            if s.endswith('Z'):
-                s = s[:-1] + '+00:00'
-            return singer_utils.strptime_with_tz(s)
-
-        def _z(dt):
-            return dt.astimezone(timezone.utc).isoformat().replace('+00:00', 'Z')
-
-        # Initialize bookmark value depending on mode
-        if replication_key:
-            # Record-level: read last value from bookmark under the replication_key
-            rk_bm_str = singer.get_bookmark(state, stream_name, replication_key)
-            if rk_bm_str:
-                since_dt = _parse_iso_maybe_z(rk_bm_str)
-            else:
-                # Back-compat: accept updatedAt/modified_since/last_modified_ts
-                updated_at_str = singer.get_bookmark(state, stream_name, 'updatedAt')
-                modified_since_str = singer.get_bookmark(state, stream_name, 'modified_since')
-                legacy_ts = None
-                try:
-                    legacy_ts = state.get('bookmarks', {}).get(stream_name, {}).get('last_modified_ts')
-                except Exception:
-                    legacy_ts = None
-                if updated_at_str:
-                    since_dt = _parse_iso_maybe_z(updated_at_str)
-                elif modified_since_str:
-                    since_dt = singer_utils.strptime_with_tz(modified_since_str)
-                elif legacy_ts is not None:
-                    since_dt = datetime.fromtimestamp(int(legacy_ts), tz=timezone.utc)
-                else:
-                    start_date = cfg.get('start_date') or '1970-01-01T00:00:00Z'
-                    since_dt = _parse_iso_maybe_z(start_date)
-            LOGGER.info('Filtering records where %s > %s.', replication_key, since_dt)
+    ts = dict(table_spec)
+    lower = gcs_path.lower()
+    if 'delimiter' not in ts or ts.get('delimiter') in (None, ''):
+        if lower.endswith('.tsv'):
+            ts['delimiter'] = '\t'
+        elif lower.endswith('.psv'):
+            ts['delimiter'] = '|'
         else:
-            # File-level: tap-s3-csv semantics using 'modified_since' bookmark
-            modified_since_str = singer.get_bookmark(state, stream_name, 'modified_since')
-            updated_at_str = singer.get_bookmark(state, stream_name, 'updatedAt')  # back-compat
-            legacy_ts = None
-            try:
-                legacy_ts = state.get('bookmarks', {}).get(stream_name, {}).get('last_modified_ts')
-            except Exception:
-                legacy_ts = None
-            if modified_since_str:
-                since_dt = singer_utils.strptime_with_tz(modified_since_str)
-            elif updated_at_str:
-                since_dt = _parse_iso_maybe_z(updated_at_str)
-                # migrate to modified_since
-                state = singer.write_bookmark(state, stream_name, 'modified_since', since_dt.isoformat())
-                try:
-                    if 'bookmarks' in state and stream_name in state['bookmarks']:
-                        state['bookmarks'][stream_name].pop('updatedAt', None)
-                except Exception:
-                    pass
-                singer.write_state(state)
-            elif legacy_ts is not None:
-                since_dt = datetime.fromtimestamp(int(legacy_ts), tz=timezone.utc)
-                state = singer.write_bookmark(state, stream_name, 'modified_since', since_dt.isoformat())
-                try:
-                    if 'bookmarks' in state and stream_name in state['bookmarks']:
-                        state['bookmarks'][stream_name].pop('last_modified_ts', None)
-                except Exception:
-                    pass
-                singer.write_state(state)
-            else:
-                start_date = cfg.get('start_date') or '1970-01-01T00:00:00Z'
-                since_dt = _parse_iso_maybe_z(start_date)
+            ts['delimiter'] = ','
 
-            LOGGER.info('Getting files modified since %s.', since_dt)
+    if "properties" in stream["schema"]:
+        iterator = csv_helper.get_row_iterator(
+            file_handle, ts, stream["schema"]["properties"].keys(), True)
+    else:
+        iterator = csv_helper.get_row_iterator(file_handle, ts, None, True)
 
-        # Collect and sort blobs by updated time to mirror tap-s3-csv
-        files = []
-        for blob in gcs._iter_matching_blobs(cfg, table_spec):
-            updated = getattr(blob, 'updated', None)
-            if not updated:
+    records_synced = 0
+
+    if iterator:
+        for row in iterator:
+            if len(row) == 0:
                 continue
-            # Only process if strictly greater than modified_since
-            if updated <= since_dt:
-                continue
-            files.append({'blob': blob, 'updated': updated})
 
-        max_rk_seen = None  # track max replication key observed
-        for item in sorted(files, key=lambda x: x['updated']):
-            blob = item['blob']
-            updated = item['updated']
+            custom_columns = {
+                gcs.SDC_SOURCE_BUCKET_COLUMN: bucket,
+                gcs.SDC_SOURCE_FILE_COLUMN: gcs_path,
+                gcs.SDC_SOURCE_LINENO_COLUMN: records_synced + 2
+            }
+            rec = {**row, **custom_columns}
 
-            if replication_key:
-                for record in gcs.iter_records_for_blob(cfg, table_spec, blob):
-                    rk_val = record.get(replication_key)
-                    # Skip records without replication key
-                    if rk_val is None:
-                        continue
-                    # Attempt to parse value as datetime
-                    try:
-                        rk_dt = _parse_iso_maybe_z(str(rk_val))
-                    except Exception:
-                        rk_dt = None
-                    if rk_dt is None:
-                        continue
-                    if rk_dt <= since_dt:
-                        continue
-                    singer.write_record(stream_name, record)
-                    row_count += 1
-                    if (max_rk_seen is None) or (rk_dt > max_rk_seen):
-                        max_rk_seen = rk_dt
-                # After each file, persist current bookmark if advanced
-                if max_rk_seen is not None:
-                    new_dt = max_rk_seen if max_rk_seen < sync_start_time else sync_start_time
-                    state = singer.write_bookmark(state, stream_name, replication_key, _z(new_dt))
-                    singer.write_state(state)
-            else:
-                for record in gcs.iter_records_for_blob(cfg, table_spec, blob):
-                    singer.write_record(stream_name, record)
-                    row_count += 1
-                # Update bookmark after each file, capped by sync_start_time, using 'modified_since'
-                new_bm_time = updated if updated < sync_start_time else sync_start_time
-                state = singer.write_bookmark(state, stream_name, 'modified_since', new_bm_time.isoformat())
-                singer.write_state(state)
+            with Transformer() as transformer:
+                to_write = transformer.transform(rec, stream['schema'], metadata.to_map(stream['metadata']))
 
-        LOGGER.info("Stream '%s' synced %d records", stream_name, row_count)
+            singer.write_record(table_name, to_write)
+            records_synced += 1
+    else:
+        LOGGER.warning('Skipping "%s" file as it is empty', gcs_path)
+        global skipped_files_count
+        skipped_files_count = skipped_files_count + 1
 
-    LOGGER.info("Finished sync")
+    return records_synced
+
+
+def sync_avro_parquet_file(config, iterator, gcs_path, table_spec, stream):
+    LOGGER.info('Syncing file "%s".', gcs_path)
+
+    bucket = config['bucket']
+    table_name = table_spec['table_name']
+
+    records_synced = 0
+
+    if iterator is not None:
+        for row in iterator:
+
+            custom_columns = {
+                gcs.SDC_SOURCE_BUCKET_COLUMN: bucket,
+                gcs.SDC_SOURCE_FILE_COLUMN: gcs_path,
+                gcs.SDC_SOURCE_LINENO_COLUMN: records_synced + 1
+            }
+            rec = {**row, **custom_columns}
+
+            with Transformer() as transformer:
+                to_write = transformer.transform(rec, stream['schema'], metadata.to_map(stream['metadata']))
+
+            singer.write_record(table_name, to_write)
+            records_synced += 1
+    else:
+        LOGGER.warning('Skipping "%s" file as it is empty', gcs_path)
+        global skipped_files_count
+        skipped_files_count = skipped_files_count + 1
+
+    return records_synced
+
+
+def sync_avro_file(config, file_handle, gcs_path, table_spec, stream):
+    iterator = avro.get_row_iterator(file_handle)
+    return sync_avro_parquet_file(config, iterator, gcs_path, table_spec, stream)
+
+
+def sync_parquet_file(config, file_handle, gcs_path, table_spec, stream):
+    iterator = parquet.get_row_iterator(file_handle)
+    return sync_avro_parquet_file(config, iterator, gcs_path, table_spec, stream)
+
+
+def sync_jsonl_file(config, iterator, gcs_path, table_spec, stream):
+    LOGGER.info('Syncing file "%s".', gcs_path)
+
+    bucket = config['bucket']
+    table_name = table_spec['table_name']
+
+    records_synced = 0
+
+    for row in iterator:
+
+        custom_columns = {
+            gcs.SDC_SOURCE_BUCKET_COLUMN: bucket,
+            gcs.SDC_SOURCE_FILE_COLUMN: gcs_path,
+            gcs.SDC_SOURCE_LINENO_COLUMN: records_synced + 1
+        }
+        rec = {**row, **custom_columns}
+
+        with Transformer() as transformer:
+            to_write = transformer.transform(rec, stream['schema'], metadata.to_map(stream['metadata']))
+
+        value = [{field: rec[field]} for field in set(rec) - set(to_write)]
+
+        if value:
+            LOGGER.warning("\"%s\" is not found in catalog and its value will be stored in the \"_sdc_extra\" field.", value)
+            extra_data = {gcs.SDC_EXTRA_COLUMN: value}
+            update_to_write = {**to_write, **extra_data}
+        else:
+            update_to_write = to_write
+
+        with Transformer() as transformer:
+            update_to_write = transformer.transform(update_to_write, stream['schema'], metadata.to_map(stream['metadata']))
+
+        singer.write_record(table_name, update_to_write)
+        records_synced += 1
+
+    return records_synced
