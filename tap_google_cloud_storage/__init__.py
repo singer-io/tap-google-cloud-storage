@@ -7,6 +7,7 @@ import singer
 from singer import utils as singer_utils
 from tap_google_cloud_storage import gcs
 from tap_google_cloud_storage.discover import discover_streams
+from tap_google_cloud_storage.sync import do_sync
 
 LOGGER = singer.get_logger()
 
@@ -77,7 +78,7 @@ def main():
     if args.discover:
         do_discover(config)
     else:
-        LOGGER.info("Sync not implemented yet")
+        do_sync(config, args.state, args.catalog)
 
 
 if __name__ == "__main__":
