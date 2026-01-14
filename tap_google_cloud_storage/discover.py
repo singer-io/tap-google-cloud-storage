@@ -45,6 +45,51 @@ def load_metadata(table_spec, schema):
     mdata = metadata.write(
         mdata, (), 'table-key-properties', table_spec.get('key_properties', []))
 
+    # Derive a sensible replication key from schema (date-time fields) or config hints
+    props = schema.get('properties', {}) or {}
+    date_override_list = table_spec.get('date_overrides') or []
+    if isinstance(date_override_list, str):
+        date_override_list = [s.strip() for s in date_override_list.split(',') if s.strip()]
+
+    def is_datetime_field(s):
+        if not isinstance(s, dict):
+            return False
+        # direct format
+        if s.get('format') == 'date-time':
+            return True
+        # anyOf contains a date-time option
+        for opt in s.get('anyOf', []) or []:
+            if isinstance(opt, dict) and opt.get('format') == 'date-time':
+                return True
+        return False
+
+    candidates = set()
+    for name, pschema in props.items():
+        if is_datetime_field(pschema):
+            candidates.add(name)
+    # include configured date_overrides that are present in properties
+    for name in date_override_list:
+        if name in props:
+            candidates.add(name)
+
+    replication_key = None
+    if candidates:
+        priority = [
+            'updatedAt', 'updated_at', 'last_updated', 'lastUpdated',
+            'lastModified', 'last_modified', 'modifiedAt', 'modified_at',
+            'createdAt', 'created_at'
+        ]
+        for p in priority:
+            if p in candidates:
+                replication_key = p
+                break
+        if replication_key is None:
+            replication_key = sorted(candidates)[0]
+
+    if replication_key:
+        mdata = metadata.write(mdata, (), 'replication-method', 'INCREMENTAL')
+        mdata = metadata.write(mdata, (), 'replication-key', replication_key)
+
     for field_name in schema.get('properties', {}).keys():
         if table_spec.get('key_properties') and field_name in table_spec.get('key_properties', []):
             mdata = metadata.write(

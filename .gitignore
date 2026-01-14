@@ -160,6 +160,9 @@ venv.bak/
 dmypy.json
 config.json
 catalog*.json
+# state*
+test_files/
+output_files/
 
 # Pyre type checker
 .pyre/
