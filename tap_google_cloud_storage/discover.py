@@ -91,7 +91,6 @@ def load_metadata(table_spec, schema):
 
     if replication_key:
         mdata = metadata.write(mdata, (), 'replication-method', 'INCREMENTAL')
-        mdata = metadata.write(mdata, (), 'replication-key', replication_key)
 
     for field_name in schema.get('properties', {}).keys():
         if table_spec.get('key_properties') and field_name in table_spec.get('key_properties', []):
