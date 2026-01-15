@@ -5,6 +5,7 @@ import json
 import re
 import singer
 from google.cloud import storage
+import gcsfs
 from singer_encodings import (
     csv as singer_csv,
     jsonl as singer_jsonl,
@@ -14,6 +15,12 @@ from singer_encodings import (
 from tap_google_cloud_storage import conversion as conversion  # type: ignore
 
 LOGGER = singer.get_logger()
+
+# Global GCS filesystem instance for streaming Parquet/Avro files
+fs = None
+
+# Global counter for skipped files during discovery and sync
+skipped_files_count = 0
 
 SDC_SOURCE_BUCKET_COLUMN = "_sdc_source_bucket"
 SDC_SOURCE_FILE_COLUMN = "_sdc_source_file"
@@ -34,6 +41,23 @@ def setup_gcs_client(config):
         raise
 
 
+def setup_gcsfs_client(config):
+    """
+    Setup GCS filesystem client for streaming Parquet/Avro files.
+    Uses gcsfs which provides a filesystem interface with random access support.
+    """
+    global fs
+    if fs is None:
+        try:
+            LOGGER.info('Creating GCS filesystem client for streaming Parquet/Avro')
+            # gcsfs can use the same service account credentials
+            fs = gcsfs.GCSFileSystem(token=config, project=config.get('project_id'))
+        except Exception as e:
+            LOGGER.error("Failed to create GCS filesystem client: %s", e)
+            raise
+    return fs
+
+
 def list_files_in_bucket(config):
     """
     Generator to list files in a GCS bucket.
@@ -42,7 +66,6 @@ def list_files_in_bucket(config):
     client = setup_gcs_client(config)
     bucket_name = config.get("bucket")
     prefix = config.get("root_path", "")
-    LOGGER.info("Listing files in bucket: %s (prefix=%s)", bucket_name, prefix or "<none>")
     if not bucket_name:
         LOGGER.error("Bucket not found in config")
         raise ValueError("Bucket not found in config")
@@ -58,6 +81,37 @@ def list_files_in_bucket(config):
         raise
 
 
+def get_file_handle(config, gcs_path):
+    """
+    Get a streaming file handle for CSV/JSONL files.
+    Returns a file-like object that can be read in chunks without loading entire file into memory.
+    """
+    try:
+        client = setup_gcs_client(config)
+        bucket = client.bucket(config['bucket'])
+        blob = bucket.blob(gcs_path)
+        # Open blob as streaming reader - doesn't load entire file into memory
+        return blob.open('rb')
+    except Exception as exc:
+        LOGGER.warning("Failed to open streaming handle for %s: %s", gcs_path, exc)
+        return None
+
+
+def get_gcsfs_file_handle(config, gcs_path):
+    """
+    Get a streaming file handle for Parquet/Avro/compressed files using gcsfs.
+    This provides random access (seeking) without downloading the entire file.
+    """
+    try:
+        bucket = config['bucket']
+        fs_client = setup_gcsfs_client(config)
+        # Open file with gcsfs - supports streaming with random access
+        return fs_client.open(f'gs://{bucket}/{gcs_path}', 'rb')
+    except Exception as exc:
+        LOGGER.warning("Failed to open streaming handle for %s: %s", gcs_path, exc)
+        return None
+
+
 def _iter_matching_blobs(config, table_spec):
     """Yield blobs matching table_spec search_prefix and search_pattern."""
     search_prefix = table_spec.get('search_prefix', '') or ''
@@ -70,6 +124,30 @@ def _iter_matching_blobs(config, table_spec):
         name = blob.name
         if regex is None or regex.search(name):
             yield blob
+
+
+def get_input_files_for_table(config, table_spec, modified_since=None):
+    """
+    Get all files matching the table spec pattern and modified since the given timestamp.
+    Yields dictionaries with 'key' and 'last_modified' for each matching file.
+    """
+    table_name = table_spec.get('table_name', '')
+    pattern = table_spec.get('search_pattern', '')
+
+    matched_files_count = 0
+
+    for blob in _iter_matching_blobs(config, table_spec):
+        updated = getattr(blob, 'updated', None)
+        if not updated:
+            LOGGER.debug('Skipping blob "%s" - no updated timestamp', blob.name)
+            continue
+
+        if modified_since is None or updated > modified_since:
+            matched_files_count += 1
+            yield {'key': blob.name, 'last_modified': updated}
+    if matched_files_count == 0:
+        LOGGER.warning('No files found matching pattern "%s" modified since %s',
+                      pattern, modified_since)
 
 
 def _get_records_for_csv(gcs_path, sample_rate, buffer, table_spec):

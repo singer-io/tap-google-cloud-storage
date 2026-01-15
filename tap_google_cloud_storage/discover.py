@@ -45,6 +45,7 @@ def load_metadata(table_spec, schema):
     mdata = metadata.write(
         mdata, (), 'table-key-properties', table_spec.get('key_properties', []))
 
+
     # Derive a sensible replication key from schema (date-time fields) or config hints
     props = schema.get('properties', {}) or {}
     date_override_list = table_spec.get('date_overrides') or []
@@ -88,7 +89,6 @@ def load_metadata(table_spec, schema):
 
     if replication_key:
         mdata = metadata.write(mdata, (), 'replication-method', 'INCREMENTAL')
-        mdata = metadata.write(mdata, (), 'replication-key', replication_key)
 
     for field_name in schema.get('properties', {}).keys():
         if table_spec.get('key_properties') and field_name in table_spec.get('key_properties', []):
