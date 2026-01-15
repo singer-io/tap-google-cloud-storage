@@ -45,9 +45,6 @@ def load_metadata(table_spec, schema):
     mdata = metadata.write(
         mdata, (), 'table-key-properties', table_spec.get('key_properties', []))
 
-    # Always select streams discovered
-    mdata = metadata.write(mdata, (), 'selected', True)
-
     # Derive a sensible replication key from schema (date-time fields) or config hints
     props = schema.get('properties', {}) or {}
     date_override_list = table_spec.get('date_overrides') or []
