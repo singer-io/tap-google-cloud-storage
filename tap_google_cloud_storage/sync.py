@@ -20,7 +20,6 @@ from tap_google_cloud_storage import gcs
 
 
 LOGGER = singer.get_logger()
-skipped_files_count = 0
 
 
 def stream_is_selected(mdata_map):
@@ -36,7 +35,7 @@ def sync_stream(config, state, table_spec, stream, sync_start_time):
     LOGGER.info('Syncing table "%s".', table_name)
     LOGGER.info('Getting files modified since %s.', modified_since)
 
-    gcs_files = get_input_files_for_table(config, table_spec, modified_since)
+    gcs_files = gcs.get_input_files_for_table(config, table_spec, modified_since)
 
     records_streamed = 0
 
@@ -48,37 +47,10 @@ def sync_stream(config, state, table_spec, stream, sync_start_time):
             state = singer.write_bookmark(state, table_name, 'modified_since', sync_start_time.isoformat())
         singer.write_state(state)
 
-    if skipped_files_count:
-        LOGGER.warn("%s files got skipped during the last sync.", skipped_files_count)
-
-    LOGGER.info('Wrote %s records for table "%s".', records_streamed, table_name)
+    if gcs.skipped_files_count:
+        LOGGER.warn("%s files got skipped during the last sync.", gcs.skipped_files_count)
 
     return records_streamed
-
-
-def get_input_files_for_table(config, table_spec, modified_since):
-    files = []
-    for blob in gcs._iter_matching_blobs(config, table_spec):
-        updated = getattr(blob, 'updated', None)
-        if not updated:
-            continue
-        if updated > modified_since:
-            files.append({
-                'key': blob.name,
-                'last_modified': updated
-            })
-    return files
-
-
-def _download_blob_bytes(config, gcs_path):
-    try:
-        client = gcs.setup_gcs_client(config)
-        bucket = client.bucket(config['bucket'])
-        blob = bucket.blob(gcs_path)
-        return blob.download_as_bytes()
-    except Exception as exc:
-        LOGGER.warning("Skipping %s file due to download error: %s", gcs_path, exc)
-        return None
 
 
 def sync_table_file(config, gcs_path, table_spec, stream):
@@ -87,8 +59,7 @@ def sync_table_file(config, gcs_path, table_spec, stream):
 
     if not extension or gcs_path.lower() == extension:
         LOGGER.warning('"%s" without extension will not be synced.', gcs_path)
-        global skipped_files_count
-        skipped_files_count = skipped_files_count + 1
+        gcs.skipped_files_count = gcs.skipped_files_count + 1
         return 0
     try:
         if extension == "zip" or extension == "gz":
@@ -98,50 +69,47 @@ def sync_table_file(config, gcs_path, table_spec, stream):
         LOGGER.warning('"%s" having the ".%s" extension will not be synced.', gcs_path, extension)
     except (UnicodeDecodeError, json.decoder.JSONDecodeError):
         LOGGER.warning("Skipping %s file as parsing failed. Verify an extension of the file.", gcs_path)
-        skipped_files_count = skipped_files_count + 1
+        gcs.skipped_files_count = gcs.skipped_files_count + 1
     return 0
 
 
 def handle_file(config, gcs_path, table_spec, stream, extension, file_handler=None):
     if not extension or gcs_path.lower() == extension:
         LOGGER.warning('"%s" without extension will not be synced.', gcs_path)
-        global skipped_files_count
-        skipped_files_count = skipped_files_count + 1
+        gcs.skipped_files_count = gcs.skipped_files_count + 1
         return 0
     if extension in ["csv", "txt", "tsv", "psv"]:
-        data = file_handler.read() if file_handler else _download_blob_bytes(config, gcs_path)
-        if data is None:
-            skipped_files_count = skipped_files_count + 1
+        # Use streaming file handle - doesn't load entire file into memory
+        file_handle = file_handler if file_handler else gcs.get_file_handle(config, gcs_path)
+        if file_handle is None:
+            gcs.skipped_files_count = gcs.skipped_files_count + 1
             return 0
-        file_handle = io.BytesIO(data)
         return sync_csv_file(config, file_handle, gcs_path, table_spec, stream)
 
     if extension == "parquet":
-        data = file_handler.read() if file_handler else _download_blob_bytes(config, gcs_path)
-        if data is None:
-            skipped_files_count = skipped_files_count + 1
+        file_handle = file_handler if file_handler else gcs.get_gcsfs_file_handle(config, gcs_path)
+        if file_handle is None:
+            gcs.skipped_files_count = gcs.skipped_files_count + 1
             return 0
-        file_handle = io.BytesIO(data)
         return sync_parquet_file(config, file_handle, gcs_path, table_spec, stream)
 
     if extension == "avro":
-        data = file_handler.read() if file_handler else _download_blob_bytes(config, gcs_path)
-        if data is None:
-            skipped_files_count = skipped_files_count + 1
+        file_handle = file_handler if file_handler else gcs.get_gcsfs_file_handle(config, gcs_path)
+        if file_handle is None:
+            gcs.skipped_files_count = gcs.skipped_files_count + 1
             return 0
-        file_handle = io.BytesIO(data)
         return sync_avro_file(config, file_handle, gcs_path, table_spec, stream)
 
     if extension == "jsonl":
-        data = file_handler.read() if file_handler else _download_blob_bytes(config, gcs_path)
-        if data is None:
-            skipped_files_count = skipped_files_count + 1
+        # Use streaming file handle - doesn't load entire file into memory
+        file_handle = file_handler if file_handler else gcs.get_file_handle(config, gcs_path)
+        if file_handle is None:
+            gcs.skipped_files_count = gcs.skipped_files_count + 1
             return 0
-        file_handle = io.BytesIO(data)
         iterator = jsonl.get_row_iterator(file_handle)
         records = sync_jsonl_file(config, iterator, gcs_path, table_spec, stream)
         if records == 0:
-            skipped_files_count = skipped_files_count + 1
+            gcs.skipped_files_count = gcs.skipped_files_count + 1
             LOGGER.warning('Skipping "%s" file as it is empty', gcs_path)
         return records
 
@@ -149,7 +117,7 @@ def handle_file(config, gcs_path, table_spec, stream, extension, file_handler=No
         return sync_compressed_file(config, gcs_path, table_spec, stream)
 
     LOGGER.warning('"%s" having the ".%s" extension will not be synced.', gcs_path, extension)
-    skipped_files_count = skipped_files_count + 1
+    gcs.skipped_files_count = gcs.skipped_files_count + 1
     return 0
 
 
@@ -157,11 +125,14 @@ def sync_compressed_file(config, gcs_path, table_spec, stream):
     LOGGER.info('Syncing Compressed file "%s".', gcs_path)
 
     records_streamed = 0
-    data = _download_blob_bytes(config, gcs_path)
-    if data is None:
+    # Use gcsfs for streaming compressed files
+    file_handle = gcs.get_gcsfs_file_handle(config, gcs_path)
+    if file_handle is None:
         return 0
 
-    decompressed_files = compression.infer(io.BytesIO(data), gcs_path)
+    # Read the file content for decompression
+    # Note: compression.infer needs the data, but gcsfs streams it efficiently
+    decompressed_files = compression.infer(io.BytesIO(file_handle.read()), gcs_path)
 
     for decompressed_file in decompressed_files:
         extension = decompressed_file.name.split(".")[-1].lower()
@@ -222,8 +193,7 @@ def sync_csv_file(config, file_handle, gcs_path, table_spec, stream):
             records_synced += 1
     else:
         LOGGER.warning('Skipping "%s" file as it is empty', gcs_path)
-        global skipped_files_count
-        skipped_files_count = skipped_files_count + 1
+        gcs.skipped_files_count = gcs.skipped_files_count + 1
 
     return records_synced
 
@@ -253,8 +223,7 @@ def sync_avro_parquet_file(config, iterator, gcs_path, table_spec, stream):
             records_synced += 1
     else:
         LOGGER.warning('Skipping "%s" file as it is empty', gcs_path)
-        global skipped_files_count
-        skipped_files_count = skipped_files_count + 1
+        gcs.skipped_files_count = gcs.skipped_files_count + 1
 
     return records_synced
 

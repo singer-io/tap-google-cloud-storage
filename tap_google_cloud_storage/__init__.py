@@ -10,6 +10,7 @@ from singer import metadata
 from tap_google_cloud_storage import gcs
 from tap_google_cloud_storage.discover import discover_streams
 from tap_google_cloud_storage.sync import sync_stream, stream_is_selected
+from tap_google_cloud_storage.config import CONFIG_CONTRACT
 
 LOGGER = singer.get_logger()
 
@@ -25,35 +26,7 @@ REQUIRED_CONFIG_KEYS = [
 
 def do_discover(config):
     LOGGER.info("Starting discover")
-
-    cfg = dict(config)
-    tables = cfg.get('tables', [])
-    if isinstance(tables, str):
-        tables = json.loads(tables)
-
-    for table in tables:
-        search_prefix = table.get('search_prefix')
-        if search_prefix:
-            if search_prefix.startswith('/'):
-                table['search_prefix'] = search_prefix[1:]
-        else:
-            table.pop('search_prefix', None)
-
-        key_props = table.get('key_properties')
-        if key_props == "" or key_props is None:
-            table['key_properties'] = []
-        elif isinstance(key_props, str):
-            table['key_properties'] = [s.strip() for s in key_props.split(',')]
-
-        date_overrides = table.get('date_overrides')
-        if date_overrides == "" or date_overrides is None:
-            table['date_overrides'] = []
-        elif isinstance(date_overrides, str):
-            table['date_overrides'] = [s.strip() for s in date_overrides.split(',')]
-
-    cfg['tables'] = tables
-
-    streams = discover_streams(cfg)
+    streams = discover_streams(config)
     if not streams:
         raise Exception("No streams found")
 
@@ -78,9 +51,40 @@ def do_sync(config, catalog, state, sync_start_time):
 
         LOGGER.info("%s: Starting sync", stream_name)
         counter_value = sync_stream(config, state, table_spec, stream, sync_start_time)
-        LOGGER.info("%s: Completed sync (%s rows)", stream_name, counter_value)
+        LOGGER.info("%s: Completed sync (%s)", stream_name, counter_value)
 
     LOGGER.info('Done syncing.')
+
+
+def validate_table_config(config):
+    """Validate and normalize table configuration."""
+    # Parse the incoming tables config as JSON
+    tables = config.get('tables', [])
+    if isinstance(tables, str):
+        tables = json.loads(tables)
+
+    for table_config in tables:
+        # Normalize search_prefix - remove leading slash
+        if search_prefix := table_config.get('search_prefix'):
+            if search_prefix.startswith('/'):
+                table_config['search_prefix'] = search_prefix[1:]
+        else:
+            table_config.pop('search_prefix', None)
+
+        # Normalize key_properties to list
+        if table_config.get('key_properties') == "" or table_config.get('key_properties') is None:
+            table_config['key_properties'] = []
+        elif isinstance(table_config.get('key_properties'), str):
+            table_config['key_properties'] = [s.strip() for s in table_config['key_properties'].split(',')]
+
+        # Normalize date_overrides to list
+        if table_config.get('date_overrides') == "" or table_config.get('date_overrides') is None:
+            table_config['date_overrides'] = []
+        elif isinstance(table_config.get('date_overrides'), str):
+            table_config['date_overrides'] = [s.strip() for s in table_config['date_overrides'].split(',')]
+
+    # Validate with schema contract
+    return CONFIG_CONTRACT(tables)
 
 
 @singer_utils.handle_top_exception(LOGGER)
@@ -88,35 +92,8 @@ def main():
     args = singer_utils.parse_args(REQUIRED_CONFIG_KEYS)
     config = args.config
 
-    def _validate_tables(cfg):
-        tables = cfg.get('tables', [])
-        if isinstance(tables, str):
-            try:
-                tables = json.loads(tables)
-            except Exception:
-                pass
-        for t in tables:
-            sp = t.get('search_prefix')
-            if sp:
-                if sp.startswith('/'):
-                    t['search_prefix'] = sp[1:]
-            else:
-                t.pop('search_prefix', None)
-            kp = t.get('key_properties')
-            if kp == "" or kp is None:
-                t['key_properties'] = []
-            elif isinstance(kp, str):
-                t['key_properties'] = [s.strip() for s in kp.split(',')]
-            do = t.get('date_overrides')
-            if do == "" or do is None:
-                t['date_overrides'] = []
-            elif isinstance(do, str):
-                t['date_overrides'] = [s.strip() for s in do.split(',')]
-        cfg['tables'] = tables
-        return cfg
-
-    # Normalize tables to ensure key_properties is a list, etc.
-    config = _validate_tables(config)
+    # Validate and normalize table configuration
+    config['tables'] = validate_table_config(config)
 
     try:
         file_count = 0
