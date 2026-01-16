@@ -4,6 +4,7 @@ import io
 import json
 import re
 import gzip
+import struct
 import singer
 from google.cloud import storage
 import gcsfs
@@ -28,6 +29,67 @@ SDC_SOURCE_BUCKET_COLUMN = "_sdc_source_bucket"
 SDC_SOURCE_FILE_COLUMN = "_sdc_source_file"
 SDC_SOURCE_LINENO_COLUMN = "_sdc_source_lineno"
 SDC_EXTRA_COLUMN = "_sdc_extra"
+
+
+def _read_exact(fp, n):
+    """Read exactly n bytes from file pointer.
+    Helper function for reading gzip headers.
+    """
+    data = fp.read(n)
+    while len(data) < n:
+        b = fp.read(n - len(data))
+        if not b:
+            raise EOFError("Compressed file ended before the "
+                           "end-of-stream marker was reached")
+        data += b
+    return data
+
+
+def get_file_name_from_gzfile(filename=None, fileobj=None):
+    """Read filename from gzip file header.
+    Returns the original filename stored in the gzip header,
+    or falls back to stripping .gz extension if not present.
+    """
+    _gz = gzip.GzipFile(filename=filename, fileobj=fileobj)
+    _fp = _gz.fileobj
+
+    # Check magic bytes: 0x1f 0x8b
+    magic = _fp.read(2)
+    if magic == b'':
+        return None
+
+    if magic != b'\037\213':
+        raise OSError('Not a gzipped file (%r)' % magic)
+
+    (method, flag, _) = struct.unpack("<BBIxx", _read_exact(_fp, 8))
+    if method != 8:
+        raise OSError('Unknown compression method')
+
+    # Check if filename is stored in header
+    if not flag & gzip.FNAME:
+        # Not stored in the header, use the filename sans .gz
+        fname = _fp.name if hasattr(_fp, 'name') else filename
+        if fname:
+            return fname[:-3] if fname.endswith('.gz') else fname
+        return None
+
+    if flag & gzip.FEXTRA:
+        # Read & discard the extra field, if present
+        extra_len, = struct.unpack("<H", _read_exact(_fp, 2))
+        _read_exact(_fp, extra_len)
+
+    _fname = []  # bytes for fname
+    if flag & gzip.FNAME:
+        # Read null-terminated string containing the filename
+        # RFC 1952 specifies FNAME is encoded in latin1
+        while True:
+            s = _fp.read(1)
+            if not s or s == b'\000':
+                break
+            _fname.append(s)
+        return ''.join([s.decode('latin1') for s in _fname])
+
+    return None
 
 
 def setup_gcs_client(config):
@@ -358,8 +420,19 @@ def get_sampled_schema_for_table(config, table_spec, max_files=10, sample_rate=1
                 gz_file_obj = gzip_lib.GzipFile(fileobj=io.BytesIO(data))
                 gz_data = gz_file_obj.read()
 
-                # Use the .gz filename without extension for the decompressed file name
-                gz_file_name = name[:-3] if name.endswith('.gz') else name
+                # Get the original filename from gzip header
+                try:
+                    gz_file_name = get_file_name_from_gzfile(fileobj=io.BytesIO(data))
+                except (AttributeError, OSError) as err:
+                    # If filename not in header (e.g., gzip --no-name), skip the file
+                    LOGGER.warning('Skipping "%s" - could not get original file name from gzip header', name)
+                    skipped_files_count += 1
+                    continue
+
+                if not gz_file_name:
+                    LOGGER.warning('Skipping "%s" - no filename found in gzip header', name)
+                    skipped_files_count += 1
+                    continue
 
                 gz_lower = gz_file_name.lower()
 
@@ -391,6 +464,26 @@ def get_sampled_schema_for_table(config, table_spec, max_files=10, sample_rate=1
                 LOGGER.warning('Failed to process GZ file %s: %s', name, e)
                 skipped_files_count += 1
             continue
+
+        # Check if file is gzipped even with non-gz extension (magic bytes: 1f 8b)
+        # This handles files like gz_stored_as_csv.csv which are gzipped but have .csv extension
+        is_gzipped = len(data) >= 2 and data[0] == 0x1f and data[1] == 0x8b
+        if is_gzipped and not lower.endswith('.gz'):
+            LOGGER.info('Detected gzipped content in "%s" despite non-gz extension, decompressing', name)
+            try:
+                import gzip as gzip_lib
+                # Read the original filename from the gzip header to determine actual file type
+                original_name = get_file_name_from_gzfile(fileobj=io.BytesIO(data))
+                if original_name:
+                    LOGGER.info('Gzip header indicates original filename: "%s"', original_name)
+                    # Use the original filename for file type detection
+                    lower = original_name.lower()
+                gz_file_obj = gzip_lib.GzipFile(fileobj=io.BytesIO(data))
+                data = gz_file_obj.read()
+            except Exception as e:
+                LOGGER.warning('Failed to decompress gzipped file %s: %s', name, e)
+                skipped_files_count += 1
+                continue
 
         # Delimited text: CSV/TXT/TSV/PSV (default delimiters if none provided)
         if lower.endswith('.csv') or lower.endswith('.txt') or lower.endswith('.tsv') or lower.endswith('.psv'):
