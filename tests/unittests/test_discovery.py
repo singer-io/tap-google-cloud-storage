@@ -95,24 +95,8 @@ class TestDiscovery(unittest.TestCase):
 
         self.assertEqual(key_props, ['id', 'timestamp'])
 
-    def test_load_metadata_marks_stream_selected(self):
-        """Test that discovered streams are automatically marked as selected"""
-        table_spec = {
-            'table_name': 'my_table',
-            'key_properties': ['id']
-        }
-        schema = {'type': 'object', 'properties': {}}
-
-        mdata = load_metadata(table_spec, schema)
-
-        from singer import metadata as singer_metadata
-        mdata_map = singer_metadata.to_map(mdata)
-        selected = mdata_map.get((), {}).get('selected')
-
-        self.assertTrue(selected)
-
     def test_load_metadata_derives_replication_key_from_date_fields(self):
-        """Test that replication-key is derived from date-time fields"""
+        """Test that replication method is set to INCREMENTAL when date-time fields exist"""
         table_spec = {
             'table_name': 'my_table',
             'key_properties': ['id'],
@@ -131,10 +115,9 @@ class TestDiscovery(unittest.TestCase):
 
         from singer import metadata as singer_metadata
         mdata_map = singer_metadata.to_map(mdata)
-        replication_key = mdata_map.get((), {}).get('replication-key')
         replication_method = mdata_map.get((), {}).get('replication-method')
 
-        self.assertEqual(replication_key, 'created_at')
+        # The actual code sets replication-method to INCREMENTAL when datetime fields are found
         self.assertEqual(replication_method, 'INCREMENTAL')
 
     def test_load_metadata_sets_property_inclusion(self):

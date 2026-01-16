@@ -169,15 +169,15 @@ class TestSyncTableFile(unittest.TestCase):
         mock_handle.assert_called_once()
         self.assertEqual(mock_handle.call_args[0][4], 'avro')
 
-    @patch('tap_google_cloud_storage.sync.sync_compressed_file')
-    def test_sync_table_file_handles_gzip(self, mock_compressed):
+    @patch('tap_google_cloud_storage.sync.sync_gz_file')
+    def test_sync_table_file_handles_gzip(self, mock_gz_file):
         """Test that gzip files are handled"""
-        mock_compressed.return_value = 30
+        mock_gz_file.return_value = 30
 
         result = sync_table_file(self.config, 'exports/data.gz', self.table_spec, self.stream)
 
         self.assertEqual(result, 30)
-        mock_compressed.assert_called_once()
+        mock_gz_file.assert_called_once()
 
     def test_sync_table_file_skips_files_without_extension(self):
         """Test that files without extension are skipped"""
