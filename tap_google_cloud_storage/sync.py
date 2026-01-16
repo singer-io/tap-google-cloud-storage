@@ -17,6 +17,7 @@ from singer_encodings import (
     parquet
 )
 from tap_google_cloud_storage import gcs
+from tap_google_cloud_storage.gcs import get_file_name_from_gzfile
 
 
 LOGGER = singer.get_logger()
@@ -48,7 +49,7 @@ def sync_stream(config, state, table_spec, stream, sync_start_time):
         singer.write_state(state)
 
     if gcs.skipped_files_count:
-        LOGGER.warn("%s files got skipped during the last sync.", gcs.skipped_files_count)
+        LOGGER.warning("%s files got skipped during the last sync.", gcs.skipped_files_count)
 
     return records_streamed
 
@@ -62,7 +63,9 @@ def sync_table_file(config, gcs_path, table_spec, stream):
         gcs.skipped_files_count = gcs.skipped_files_count + 1
         return 0
     try:
-        if extension == "zip" or extension == "gz":
+        if extension == "gz":
+            return sync_gz_file(config, gcs_path, table_spec, stream)
+        if extension == "zip":
             return sync_compressed_file(config, gcs_path, table_spec, stream)
         if extension in ["csv", "jsonl", "txt", "tsv", "psv", "parquet", "avro"]:
             return handle_file(config, gcs_path, table_spec, stream, extension)
@@ -78,6 +81,22 @@ def handle_file(config, gcs_path, table_spec, stream, extension, file_handler=No
         LOGGER.warning('"%s" without extension will not be synced.', gcs_path)
         gcs.skipped_files_count = gcs.skipped_files_count + 1
         return 0
+
+    # Check if file is gzipped despite non-gz extension (magic bytes: 1f 8b)
+    # This handles files like gz_stored_as_csv.csv which are gzipped but have .csv extension
+    if extension in ["csv", "txt", "tsv", "psv", "jsonl"] and not file_handler:
+        # For files without a handler (not from zip), check if they're secretly gzipped
+        file_handle = gcs.get_gcsfs_file_handle(config, gcs_path)
+        if file_handle:
+            # Read first 2 bytes to check for gzip magic number
+            peek_data = file_handle.read(2)
+            file_handle.close()
+
+            if len(peek_data) >= 2 and peek_data[0] == 0x1f and peek_data[1] == 0x8b:
+                LOGGER.info('Detected gzipped content in "%s" despite .%s extension, treating as gz file', gcs_path, extension)
+                # Treat as a gz file instead
+                return sync_gz_file(config, gcs_path, table_spec, stream)
+
     if extension in ["csv", "txt", "tsv", "psv"]:
         # Use streaming file handle - doesn't load entire file into memory
         file_handle = file_handler if file_handler else gcs.get_file_handle(config, gcs_path)
@@ -127,7 +146,41 @@ def handle_file(config, gcs_path, table_spec, stream, extension, file_handler=No
     return 0
 
 
+def sync_gz_file(config, gcs_path, table_spec, stream, file_handler=None):
+    """Handle .gz files by reading the original filename from gzip header."""
+    # If file is extracted from zip use file object else get file object from GCS bucket
+    file_object = file_handler if file_handler else gcs.get_gcsfs_file_handle(config, gcs_path)
+    if file_object is None:
+        return 0
+
+    file_bytes = file_object.read()
+    gz_file_obj = gzip.GzipFile(fileobj=io.BytesIO(file_bytes))
+
+    try:
+        gz_file_name = get_file_name_from_gzfile(fileobj=io.BytesIO(file_bytes))
+    except (AttributeError, OSError) as err:
+        # If a file is compressed using gzip command with --no-name attribute,
+        # It will not return the file name and timestamp. Hence we will skip such files.
+        LOGGER.warning('Skipping "%s" file as we did not get the original file name', gcs_path)
+        gcs.skipped_files_count = gcs.skipped_files_count + 1
+        return 0
+
+    if gz_file_name:
+        if gz_file_name.endswith(".gz"):
+            LOGGER.warning('Skipping "%s" file as it contains nested compression.', gcs_path)
+            gcs.skipped_files_count = gcs.skipped_files_count + 1
+            return 0
+
+        gz_file_extension = gz_file_name.split(".")[-1].lower()
+        return handle_file(config, gcs_path + "/" + gz_file_name, table_spec, stream, gz_file_extension, io.BytesIO(gz_file_obj.read()))
+
+    LOGGER.warning('Skipping "%s" file - no filename found in gzip header', gcs_path)
+    gcs.skipped_files_count = gcs.skipped_files_count + 1
+    return 0
+
+
 def sync_compressed_file(config, gcs_path, table_spec, stream):
+    """Handle .zip files by extracting and syncing contents."""
     LOGGER.info('Syncing Compressed file "%s".', gcs_path)
 
     records_streamed = 0
