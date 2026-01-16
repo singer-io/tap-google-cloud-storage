@@ -144,7 +144,7 @@ def get_input_files_for_table(config, table_spec, modified_since=None):
             LOGGER.debug('Skipping blob "%s" - no updated timestamp', blob.name)
             continue
 
-        if modified_since is None or updated > modified_since:
+        if modified_since is None or updated >= modified_since:
             matched_files_count += 1
             yield {'key': blob.name, 'last_modified': updated}
     if matched_files_count == 0:
