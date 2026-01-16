@@ -358,13 +358,8 @@ def get_sampled_schema_for_table(config, table_spec, max_files=10, sample_rate=1
                 gz_file_obj = gzip_lib.GzipFile(fileobj=io.BytesIO(data))
                 gz_data = gz_file_obj.read()
 
-                # Try to determine the original file name
-                try:
-                    from tap_google_cloud_storage import utils
-                    gz_file_name = utils.get_file_name_from_gzfile(fileobj=io.BytesIO(data))
-                except:
-                    # If can't get original name, use the .gz filename without extension
-                    gz_file_name = name[:-3] if name.endswith('.gz') else name
+                # Use the .gz filename without extension for the decompressed file name
+                gz_file_name = name[:-3] if name.endswith('.gz') else name
 
                 gz_lower = gz_file_name.lower()
 
