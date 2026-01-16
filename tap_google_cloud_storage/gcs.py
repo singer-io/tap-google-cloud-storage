@@ -3,6 +3,7 @@
 import io
 import json
 import re
+import gzip
 import singer
 from google.cloud import storage
 import gcsfs
@@ -11,6 +12,7 @@ from singer_encodings import (
     jsonl as singer_jsonl,
     parquet as singer_parquet,
     avro as singer_avro,
+    compression
 )
 from tap_google_cloud_storage import conversion as conversion  # type: ignore
 
@@ -289,6 +291,7 @@ def get_sampled_schema_for_table(config, table_spec, max_files=10, sample_rate=1
     samples = []
     bucket_name = config.get('bucket')
     found_any = False
+    global skipped_files_count
 
     for idx, blob in enumerate(_iter_matching_blobs(config, table_spec)):
         found_any = True
@@ -301,6 +304,92 @@ def get_sampled_schema_for_table(config, table_spec, max_files=10, sample_rate=1
             data = blob.download_as_bytes()
         except Exception as e:
             LOGGER.warning('Skipping %s due to download error: %s', name, e)
+            skipped_files_count += 1
+            continue
+
+        # Handle ZIP files - extract and sample contents
+        if lower.endswith('.zip'):
+            try:
+                from singer_encodings import compression
+                decompressed_files = compression.infer(io.BytesIO(data), name)
+                for decompressed_file in decompressed_files:
+                    de_name = decompressed_file.name
+                    de_lower = de_name.lower()
+                    de_extension = de_lower.split('.')[-1]
+
+                    # Skip nested compressed files
+                    if de_extension in ['zip', 'gz', 'tar']:
+                        LOGGER.warning('Skipping "%s/%s" - nested compression not supported for sampling', name, de_name)
+                        skipped_files_count += 1
+                        continue
+
+                    # Sample the extracted file
+                    if de_lower.endswith('.csv') or de_lower.endswith('.txt') or de_lower.endswith('.tsv') or de_lower.endswith('.psv'):
+                        ts = dict(table_spec or {})
+                        if 'delimiter' not in ts or ts.get('delimiter') in (None, ''):
+                            if de_lower.endswith('.tsv'):
+                                ts['delimiter'] = '\t'
+                            elif de_lower.endswith('.psv'):
+                                ts['delimiter'] = '|'
+                            else:
+                                ts['delimiter'] = ','
+                        for rec in _get_records_for_csv(f"{name}/{de_name}", sample_rate, decompressed_file, ts):
+                            samples.append(rec)
+                    elif de_lower.endswith('.jsonl'):
+                        de_data = decompressed_file.read()
+                        for rec in _get_records_for_jsonl(sample_rate, de_data):
+                            samples.append(rec)
+                    else:
+                        LOGGER.warning('Skipping "%s/%s" - unsupported file type inside ZIP', name, de_name)
+                        skipped_files_count += 1
+            except Exception as e:
+                LOGGER.warning('Failed to process ZIP file %s: %s', name, e)
+                skipped_files_count += 1
+            continue
+
+        # Handle GZ files - decompress and sample
+        if lower.endswith('.gz'):
+            if lower.endswith('.tar.gz'):
+                LOGGER.warning('Skipping "%s" - .tar.gz not supported for sampling', name)
+                skipped_files_count += 1
+                continue
+            try:
+                import gzip as gzip_lib
+                gz_file_obj = gzip_lib.GzipFile(fileobj=io.BytesIO(data))
+                gz_data = gz_file_obj.read()
+
+                # Use the .gz filename without extension for the decompressed file name
+                gz_file_name = name[:-3] if name.endswith('.gz') else name
+
+                gz_lower = gz_file_name.lower()
+
+                # Check for nested compression
+                if gz_lower.endswith('.gz'):
+                    LOGGER.warning('Skipping "%s" - nested compression not supported', name)
+                    skipped_files_count += 1
+                    continue
+
+                # Sample the decompressed file
+                if gz_lower.endswith('.csv') or gz_lower.endswith('.txt') or gz_lower.endswith('.tsv') or gz_lower.endswith('.psv'):
+                    ts = dict(table_spec or {})
+                    if 'delimiter' not in ts or ts.get('delimiter') in (None, ''):
+                        if gz_lower.endswith('.tsv'):
+                            ts['delimiter'] = '\t'
+                        elif gz_lower.endswith('.psv'):
+                            ts['delimiter'] = '|'
+                        else:
+                            ts['delimiter'] = ','
+                    for rec in _get_records_for_csv(f"{name}/{gz_file_name}", sample_rate, io.BytesIO(gz_data), ts):
+                        samples.append(rec)
+                elif gz_lower.endswith('.jsonl'):
+                    for rec in _get_records_for_jsonl(sample_rate, gz_data):
+                        samples.append(rec)
+                else:
+                    LOGGER.warning('Skipping "%s" - unsupported file type inside GZ', name)
+                    skipped_files_count += 1
+            except Exception as e:
+                LOGGER.warning('Failed to process GZ file %s: %s', name, e)
+                skipped_files_count += 1
             continue
 
         # Delimited text: CSV/TXT/TSV/PSV (default delimiters if none provided)
@@ -330,12 +419,17 @@ def get_sampled_schema_for_table(config, table_spec, max_files=10, sample_rate=1
                 samples.append(rec)
         else:
             LOGGER.warning('"%s" with unsupported extension for sampling; skipping', name)
+            skipped_files_count += 1
 
     # If no objects matched the configured prefix/pattern, signal caller to skip stream
     if not found_any:
         return None
 
+    if skipped_files_count:
+        LOGGER.warning("%s files got skipped during sampling.", skipped_files_count)
+
     if not samples:
+        LOGGER.info("No samples found, returning empty properties")
         return {
             'type': 'object',
             'properties': {}

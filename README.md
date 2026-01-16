@@ -4,7 +4,7 @@ Singer tap for discovering schemas from files in Google Cloud Storage.
 
 Supported discovery formats:
 - Delimited text: CSV, TSV, PSV, TXT (via `singer-encodings`)
-- JSON Lines (`.jsonl`) and JSON arrays/objects (`.json`)
+- JSON Lines (`.jsonl`)
 - Parquet (`.parquet`, via `pyarrow`)
 - Avro (`.avro`, via `fastavro`)
 
@@ -16,14 +16,7 @@ Config highlights:
 - Provide service account fields inline plus `bucket` and optional `root_path`.
 - `tables` is a JSON-encoded array of table specs, e.g.:
 ```
-"tables": "[
-	{\"search_prefix\":\"exports\",\"search_pattern\":\"my_table\\/.*\\.csv\",\"table_name\":\"my_table_csv\",\"delimiter\":\",\"},
-	{\"search_prefix\":\"exports\",\"search_pattern\":\"my_table\\/.*\\.tsv\",\"table_name\":\"my_table_tsv\"},
-	{\"search_prefix\":\"exports\",\"search_pattern\":\"my_table\\/.*\\.jsonl\",\"table_name\":\"my_table_jsonl\"},
-	{\"search_prefix\":\"exports\",\"search_pattern\":\"my_table\\/.*\\.json\",\"table_name\":\"my_table_json\"},
-	{\"search_prefix\":\"exports\",\"search_pattern\":\"my_table\\/.*\\.parquet\",\"table_name\":\"my_table_parquet\"},
-	{\"search_prefix\":\"exports\",\"search_pattern\":\"my_table\\/.*\\.avro\",\"table_name\":\"my_table_avro\"}
-]"
+"tables": "[{"search_prefix":"exports/my_table","search_pattern":".\\.csv$","table_name":"my_table_csv","key_properties":"id","date_overrides":"created_at","delimiter":","},{"search_prefix":"exports/my_table","search_pattern":".\\.tsv$","table_name":"my_table_tsv","key_properties":"id","date_overrides":"created_at","delimiter":"\t"},{"search_prefix":"exports/my_table","search_pattern":".\\.psv$","table_name":"my_table_psv","key_properties":"id","date_overrides":"created_at","delimiter":"|"},{"search_prefix":"exports/my_table","search_pattern":".\\.txt$","table_name":"my_table_txt","key_properties":"id","date_overrides":"created_at","delimiter":","},{"search_prefix":"exports/my_table","search_pattern":".\\.jsonl$","table_name":"my_table_jsonl","key_properties":"id","date_overrides":"created_at"},{"search_prefix":"exports/my_table","search_pattern":".\\.parquet$","table_name":"my_table_parquet","key_properties":"id","date_overrides":"created_at"},{"search_prefix":"exports/my_table","search_pattern":".\\.avro$","table_name":"my_table_avro","key_properties":"id","date_overrides":"created_at"}]"
 ```
 
 Notes:
