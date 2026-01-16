@@ -49,7 +49,7 @@ def sync_stream(config, state, table_spec, stream, sync_start_time):
         singer.write_state(state)
 
     if gcs.skipped_files_count:
-        LOGGER.warn("%s files got skipped during the last sync.", gcs.skipped_files_count)
+        LOGGER.warning("%s files got skipped during the last sync.", gcs.skipped_files_count)
 
     return records_streamed
 
@@ -81,7 +81,7 @@ def handle_file(config, gcs_path, table_spec, stream, extension, file_handler=No
         LOGGER.warning('"%s" without extension will not be synced.', gcs_path)
         gcs.skipped_files_count = gcs.skipped_files_count + 1
         return 0
-    
+
     # Check if file is gzipped despite non-gz extension (magic bytes: 1f 8b)
     # This handles files like gz_stored_as_csv.csv which are gzipped but have .csv extension
     if extension in ["csv", "txt", "tsv", "psv", "jsonl"] and not file_handler:
@@ -91,12 +91,12 @@ def handle_file(config, gcs_path, table_spec, stream, extension, file_handler=No
             # Read first 2 bytes to check for gzip magic number
             peek_data = file_handle.read(2)
             file_handle.close()
-            
+
             if len(peek_data) >= 2 and peek_data[0] == 0x1f and peek_data[1] == 0x8b:
                 LOGGER.info('Detected gzipped content in "%s" despite .%s extension, treating as gz file', gcs_path, extension)
                 # Treat as a gz file instead
                 return sync_gz_file(config, gcs_path, table_spec, stream)
-    
+
     if extension in ["csv", "txt", "tsv", "psv"]:
         # Use streaming file handle - doesn't load entire file into memory
         file_handle = file_handler if file_handler else gcs.get_file_handle(config, gcs_path)
