@@ -31,14 +31,34 @@ def delete_and_push_file(properties, resource_names, folder_path=None, search_pr
         folder_path (str, optional): Subfolder within resources directory
         search_prefix_index (int): Index of the table in tables config
     """
-    # Initialize GCS client
-    storage_client = storage.Client.from_service_account_json(properties['key_file'])
-    
+    # Initialize GCS client from environment variables
+    from google.oauth2 import service_account
+
+    # Get private key and replace literal \n with actual newlines
+    private_key = os.getenv('TAP_GCS_PRIVATE_KEY', '')
+    if private_key and '\\n' in private_key:
+        private_key = private_key.replace('\\n', '\n')
+
+    credentials_info = {
+        'type': 'service_account',
+        'project_id': os.getenv('TAP_GCS_PROJECT_ID'),
+        'private_key_id': os.getenv('TAP_GCS_PRIVATE_KEY_ID'),
+        'private_key': private_key,
+        'client_email': os.getenv('TAP_GCS_CLIENT_EMAIL'),
+        'client_id': os.getenv('TAP_GCS_CLIENT_ID'),
+        'auth_uri': 'https://accounts.google.com/o/oauth2/auth',
+        'token_uri': 'https://oauth2.googleapis.com/token',
+        'auth_provider_x509_cert_url': 'https://www.googleapis.com/oauth2/v1/certs'
+    }
+
+    credentials = service_account.Credentials.from_service_account_info(credentials_info)
+    storage_client = storage.Client(credentials=credentials, project=credentials_info['project_id'])
+
     # Parse the tables configuration
     tables = json.loads(properties['tables'])
     bucket_name = properties['bucket']
     bucket = storage_client.bucket(bucket_name)
-    
+
     for resource_name in resource_names:
         # Construct the GCS path
         search_prefix = tables[search_prefix_index].get('search_prefix', '')

@@ -139,7 +139,3 @@ class GCSDiscoveryTest(GCSBaseTest):
                 )
                 self.assertTrue(all_available,
                               msg="Not all non-key properties are set to available in metadata")
-
-
-if __name__ == '__main__':
-    unittest.main()

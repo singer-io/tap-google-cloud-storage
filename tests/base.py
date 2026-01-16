@@ -1,4 +1,5 @@
 import json
+import os
 import time
 import unittest
 import utils_for_test as utils
@@ -28,10 +29,31 @@ class GCSBaseTest(unittest.TestCase):
     @staticmethod
     def get_credentials():
         """
-        GCS credentials are managed via service account key file.
-        The key_file path is specified in get_properties().
+        GCS credentials from environment variables.
+        Required environment variables:
+        - TAP_GCS_TYPE (usually "service_account")
+        - TAP_GCS_PROJECT_ID
+        - TAP_GCS_PRIVATE_KEY_ID
+        - TAP_GCS_PRIVATE_KEY
+        - TAP_GCS_CLIENT_EMAIL
         """
-        return {}
+        # Get private key and replace literal \n with actual newlines
+        private_key = os.getenv('TAP_GCS_PRIVATE_KEY', '')
+        if private_key and '\\n' in private_key:
+            private_key = private_key.replace('\\n', '\n')
+        
+        credentials_dict = {
+            'type': os.getenv('TAP_GCS_TYPE', 'service_account'),
+            'project_id': os.getenv('TAP_GCS_PROJECT_ID'),
+            'private_key_id': os.getenv('TAP_GCS_PRIVATE_KEY_ID'),
+            'private_key': private_key,
+            'client_email': os.getenv('TAP_GCS_CLIENT_EMAIL'),
+            'auth_uri': 'https://accounts.google.com/o/oauth2/auth',
+            'token_uri': 'https://oauth2.googleapis.com/token',
+            'auth_provider_x509_cert_url': 'https://www.googleapis.com/oauth2/v1/certs'
+        }
+
+        return credentials_dict
 
     def get_properties(self, original: bool = True):
         """
@@ -41,12 +63,11 @@ class GCSBaseTest(unittest.TestCase):
             original (bool): If True, return default properties. If False, use START_DATE.
 
         Returns:
-            dict: Configuration properties including bucket, key_file, and tables
+            dict: Configuration properties including bucket and tables
         """
         props = {
             'start_date': '2021-11-02T00:00:00Z',
-            'bucket': 'tap-gcs-test-bucket',  # Update with your GCS bucket name
-            'key_file': 'path/to/service-account-key.json',  # Update with your key file path
+            'bucket': os.getenv('TAP_GCS_BUCKET', 'tap-gcs-test-bucket'),
             'tables': json.dumps(self.table_entry)
         }
         if original:
