@@ -114,6 +114,12 @@ def handle_file(config, gcs_path, table_spec, stream, extension, file_handler=No
         return records
 
     if extension == "zip" or extension == "gz":
+        # If file_handler is provided, it means we're inside a compressed file already
+        # Skip nested compression to prevent infinite loops
+        if file_handler:
+            LOGGER.warning('Skipping "%s" file as it contains nested compression.', gcs_path)
+            gcs.skipped_files_count = gcs.skipped_files_count + 1
+            return 0
         return sync_compressed_file(config, gcs_path, table_spec, stream)
 
     LOGGER.warning('"%s" having the ".%s" extension will not be synced.', gcs_path, extension)
