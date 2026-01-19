@@ -95,14 +95,15 @@ class TestFileTimestampFiltering(unittest.TestCase):
             {'name': 'newer.csv', 'last_modified': datetime(2026, 1, 15, 0, 0, 0, tzinfo=timezone.utc)}
         ]
 
-        filtered = [f for f in files if f['last_modified'] > cutoff]
+        # Use >= to match actual implementation
+        filtered = [f for f in files if f['last_modified'] >= cutoff]
 
         self.assertEqual(len(filtered), 2)
         self.assertEqual(filtered[0]['name'], 'new.csv')
         self.assertEqual(filtered[1]['name'], 'newer.csv')
 
-    def test_strict_greater_than_excludes_equal(self):
-        """Test that files with timestamp equal to cutoff are excluded"""
+    def test_includes_files_equal_to_bookmark(self):
+        """Test that files with timestamp equal to cutoff are INCLUDED (using >=)"""
         cutoff = datetime(2026, 1, 10, 0, 0, 0, tzinfo=timezone.utc)
 
         files = [
@@ -110,10 +111,13 @@ class TestFileTimestampFiltering(unittest.TestCase):
             {'name': 'newer.csv', 'last_modified': datetime(2026, 1, 10, 0, 0, 1, tzinfo=timezone.utc)}
         ]
 
-        filtered = [f for f in files if f['last_modified'] > cutoff]
+        # Use >= to match actual implementation - includes files at exact bookmark time
+        filtered = [f for f in files if f['last_modified'] >= cutoff]
 
-        self.assertEqual(len(filtered), 1)
-        self.assertEqual(filtered[0]['name'], 'newer.csv')
+        # Both should be included since we use >=
+        self.assertEqual(len(filtered), 2)
+        self.assertEqual(filtered[0]['name'], 'equal.csv')
+        self.assertEqual(filtered[1]['name'], 'newer.csv')
 
 
 class TestFileSorting(unittest.TestCase):
