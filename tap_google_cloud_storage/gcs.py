@@ -16,6 +16,7 @@ from singer_encodings import (
     compression
 )
 from tap_google_cloud_storage import conversion as conversion  # type: ignore
+from tap_google_cloud_storage import file_processing
 
 LOGGER = singer.get_logger()
 
@@ -291,13 +292,7 @@ def iter_records_for_blob(config, table_spec, blob):
 
     if lower.endswith('.csv') or lower.endswith('.txt') or lower.endswith('.tsv') or lower.endswith('.psv'):
         ts = dict(table_spec or {})
-        if 'delimiter' not in ts or ts.get('delimiter') in (None, ''):
-            if lower.endswith('.tsv'):
-                ts['delimiter'] = '\t'
-            elif lower.endswith('.psv'):
-                ts['delimiter'] = '|'
-            else:
-                ts['delimiter'] = ','
+        ts['delimiter'] = file_processing.get_delimiter_for_file(name, table_spec)
         iterator = singer_csv.get_row_iterator(io.BytesIO(data), ts, None, True)
         for rec in iterator or []:
             row_idx += 1
@@ -371,42 +366,28 @@ def get_sampled_schema_for_table(config, table_spec, max_files=10, sample_rate=1
 
         # Handle ZIP files - extract and sample contents
         if lower.endswith('.zip'):
-            try:
-                from singer_encodings import compression
-                decompressed_files = compression.infer(io.BytesIO(data), name)
-                for decompressed_file in decompressed_files:
-                    de_name = decompressed_file.name
-                    de_lower = de_name.lower()
-                    de_extension = de_lower.split('.')[-1]
+            # Use shared utility to extract files from zip
+            for filename, file_obj, de_extension in file_processing.extract_files_from_zip(data, name):
+                if filename is None:
+                    # Skipped file (nested compression, logged by utility)
+                    skipped_files_count += 1
+                    continue
 
-                    # Skip nested compressed files
-                    if de_extension in ['zip', 'gz', 'tar']:
-                        LOGGER.warning('Skipping "%s/%s" - nested compression not supported for sampling', name, de_name)
-                        skipped_files_count += 1
-                        continue
+                de_lower = filename.lower()
 
-                    # Sample the extracted file
-                    if de_lower.endswith('.csv') or de_lower.endswith('.txt') or de_lower.endswith('.tsv') or de_lower.endswith('.psv'):
-                        ts = dict(table_spec or {})
-                        if 'delimiter' not in ts or ts.get('delimiter') in (None, ''):
-                            if de_lower.endswith('.tsv'):
-                                ts['delimiter'] = '\t'
-                            elif de_lower.endswith('.psv'):
-                                ts['delimiter'] = '|'
-                            else:
-                                ts['delimiter'] = ','
-                        for rec in _get_records_for_csv(f"{name}/{de_name}", sample_rate, decompressed_file, ts):
-                            samples.append(rec)
-                    elif de_lower.endswith('.jsonl'):
-                        de_data = decompressed_file.read()
-                        for rec in _get_records_for_jsonl(sample_rate, de_data):
-                            samples.append(rec)
-                    else:
-                        LOGGER.warning('Skipping "%s/%s" - unsupported file type inside ZIP', name, de_name)
-                        skipped_files_count += 1
-            except Exception as e:
-                LOGGER.warning('Failed to process ZIP file %s: %s', name, e)
-                skipped_files_count += 1
+                # Sample the extracted file
+                if de_lower.endswith('.csv') or de_lower.endswith('.txt') or de_lower.endswith('.tsv') or de_lower.endswith('.psv'):
+                    ts = dict(table_spec or {})
+                    ts['delimiter'] = file_processing.get_delimiter_for_file(filename, table_spec)
+                    for rec in _get_records_for_csv(f"{name}/{filename}", sample_rate, file_obj, ts):
+                        samples.append(rec)
+                elif de_lower.endswith('.jsonl'):
+                    de_data = file_obj.read()
+                    for rec in _get_records_for_jsonl(sample_rate, de_data):
+                        samples.append(rec)
+                else:
+                    LOGGER.warning('Skipping "%s/%s" - unsupported file type inside ZIP', name, filename)
+                    skipped_files_count += 1
             continue
 
         # Handle GZ files - decompress and sample
@@ -415,87 +396,46 @@ def get_sampled_schema_for_table(config, table_spec, max_files=10, sample_rate=1
                 LOGGER.warning('Skipping "%s" - .tar.gz not supported for sampling', name)
                 skipped_files_count += 1
                 continue
-            try:
-                import gzip as gzip_lib
-                gz_file_obj = gzip_lib.GzipFile(fileobj=io.BytesIO(data))
-                gz_data = gz_file_obj.read()
 
-                # Get the original filename from gzip header
-                try:
-                    gz_file_name = get_file_name_from_gzfile(fileobj=io.BytesIO(data))
-                except (AttributeError, OSError) as err:
-                    # If filename not in header (e.g., gzip --no-name), skip the file
-                    LOGGER.warning('Skipping "%s" - could not get original file name from gzip header', name)
-                    skipped_files_count += 1
-                    continue
+            # Use shared utility to extract file from gzip
+            gz_file_name, gz_data, gz_extension = file_processing.extract_file_from_gzip(
+                data, name, get_file_name_from_gzfile
+            )
 
-                if not gz_file_name:
-                    LOGGER.warning('Skipping "%s" - no filename found in gzip header', name)
-                    skipped_files_count += 1
-                    continue
+            if gz_file_name is None:
+                # Extraction failed (logged by utility)
+                skipped_files_count += 1
+                continue
 
-                gz_lower = gz_file_name.lower()
+            gz_lower = gz_file_name.lower()
 
-                # Check for nested compression
-                if gz_lower.endswith('.gz'):
-                    LOGGER.warning('Skipping "%s" - nested compression not supported', name)
-                    skipped_files_count += 1
-                    continue
-
-                # Sample the decompressed file
-                if gz_lower.endswith('.csv') or gz_lower.endswith('.txt') or gz_lower.endswith('.tsv') or gz_lower.endswith('.psv'):
-                    ts = dict(table_spec or {})
-                    if 'delimiter' not in ts or ts.get('delimiter') in (None, ''):
-                        if gz_lower.endswith('.tsv'):
-                            ts['delimiter'] = '\t'
-                        elif gz_lower.endswith('.psv'):
-                            ts['delimiter'] = '|'
-                        else:
-                            ts['delimiter'] = ','
-                    for rec in _get_records_for_csv(f"{name}/{gz_file_name}", sample_rate, io.BytesIO(gz_data), ts):
-                        samples.append(rec)
-                elif gz_lower.endswith('.jsonl'):
-                    for rec in _get_records_for_jsonl(sample_rate, gz_data):
-                        samples.append(rec)
-                else:
-                    LOGGER.warning('Skipping "%s" - unsupported file type inside GZ', name)
-                    skipped_files_count += 1
-            except Exception as e:
-                LOGGER.warning('Failed to process GZ file %s: %s', name, e)
+            # Sample the decompressed file
+            if gz_lower.endswith('.csv') or gz_lower.endswith('.txt') or gz_lower.endswith('.tsv') or gz_lower.endswith('.psv'):
+                ts = dict(table_spec or {})
+                ts['delimiter'] = file_processing.get_delimiter_for_file(gz_file_name, table_spec)
+                for rec in _get_records_for_csv(f"{name}/{gz_file_name}", sample_rate, io.BytesIO(gz_data), ts):
+                    samples.append(rec)
+            elif gz_lower.endswith('.jsonl'):
+                for rec in _get_records_for_jsonl(sample_rate, gz_data):
+                    samples.append(rec)
+            else:
+                LOGGER.warning('Skipping "%s" - unsupported file type inside GZ', name)
                 skipped_files_count += 1
             continue
 
         # Check if file is gzipped even with non-gz extension (magic bytes: 1f 8b)
         # This handles files like gz_stored_as_csv.csv which are gzipped but have .csv extension
-        is_gzipped = len(data) >= 2 and data[0] == 0x1f and data[1] == 0x8b
-        if is_gzipped and not lower.endswith('.gz'):
-            LOGGER.info('Detected gzipped content in "%s" despite non-gz extension, decompressing', name)
-            try:
-                import gzip as gzip_lib
-                # Read the original filename from the gzip header to determine actual file type
-                original_name = get_file_name_from_gzfile(fileobj=io.BytesIO(data))
-                if original_name:
-                    LOGGER.info('Gzip header indicates original filename: "%s"', original_name)
-                    # Use the original filename for file type detection
-                    lower = original_name.lower()
-                gz_file_obj = gzip_lib.GzipFile(fileobj=io.BytesIO(data))
-                data = gz_file_obj.read()
-            except Exception as e:
-                LOGGER.warning('Failed to decompress gzipped file %s: %s', name, e)
-                skipped_files_count += 1
-                continue
+        if file_processing.detect_gzip_magic_bytes(data) and not lower.endswith('.gz'):
+            # Use shared utility to decompress
+            data, lower_name = file_processing.decompress_if_gzipped(data, name, get_file_name_from_gzfile)
+            if lower_name != name:
+                lower = lower_name.lower()
 
         # Delimited text: CSV/TXT/TSV/PSV (default delimiters if none provided)
         if lower.endswith('.csv') or lower.endswith('.txt') or lower.endswith('.tsv') or lower.endswith('.psv'):
             # Clone table_spec to inject default delimiter if not provided
             ts = dict(table_spec or {})
-            if 'delimiter' not in ts or ts.get('delimiter') in (None, ''):
-                if lower.endswith('.tsv'):
-                    ts['delimiter'] = '\t'
-                elif lower.endswith('.psv'):
-                    ts['delimiter'] = '|'
-                else:
-                    ts['delimiter'] = ','
+            ts['delimiter'] = file_processing.get_delimiter_for_file(name, table_spec)
             for rec in _get_records_for_csv(name, sample_rate, io.BytesIO(data), ts):
                 samples.append(rec)
         elif lower.endswith('.jsonl'):

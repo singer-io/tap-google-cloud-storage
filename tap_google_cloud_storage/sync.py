@@ -18,6 +18,7 @@ from singer_encodings import (
 )
 from tap_google_cloud_storage import gcs
 from tap_google_cloud_storage.gcs import get_file_name_from_gzfile
+from tap_google_cloud_storage import file_processing
 
 
 LOGGER = singer.get_logger()
@@ -92,7 +93,7 @@ def handle_file(config, gcs_path, table_spec, stream, extension, file_handler=No
             peek_data = file_handle.read(2)
             file_handle.close()
 
-            if len(peek_data) >= 2 and peek_data[0] == 0x1f and peek_data[1] == 0x8b:
+            if file_processing.detect_gzip_magic_bytes(peek_data):
                 LOGGER.info('Detected gzipped content in "%s" despite .%s extension, treating as gz file', gcs_path, extension)
                 # Treat as a gz file instead
                 return sync_gz_file(config, gcs_path, table_spec, stream)
@@ -154,29 +155,19 @@ def sync_gz_file(config, gcs_path, table_spec, stream, file_handler=None):
         return 0
 
     file_bytes = file_object.read()
-    gz_file_obj = gzip.GzipFile(fileobj=io.BytesIO(file_bytes))
 
-    try:
-        gz_file_name = get_file_name_from_gzfile(fileobj=io.BytesIO(file_bytes))
-    except (AttributeError, OSError) as err:
-        # If a file is compressed using gzip command with --no-name attribute,
-        # It will not return the file name and timestamp. Hence we will skip such files.
-        LOGGER.warning('Skipping "%s" file as we did not get the original file name', gcs_path)
+    # Use shared utility to extract file from gzip
+    gz_file_name, gz_data, gz_extension = file_processing.extract_file_from_gzip(
+        file_bytes, gcs_path, get_file_name_from_gzfile
+    )
+
+    if gz_file_name is None:
+        # Extraction failed (logged by utility)
         gcs.skipped_files_count = gcs.skipped_files_count + 1
         return 0
 
-    if gz_file_name:
-        if gz_file_name.endswith(".gz"):
-            LOGGER.warning('Skipping "%s" file as it contains nested compression.', gcs_path)
-            gcs.skipped_files_count = gcs.skipped_files_count + 1
-            return 0
-
-        gz_file_extension = gz_file_name.split(".")[-1].lower()
-        return handle_file(config, gcs_path + "/" + gz_file_name, table_spec, stream, gz_file_extension, io.BytesIO(gz_file_obj.read()))
-
-    LOGGER.warning('Skipping "%s" file - no filename found in gzip header', gcs_path)
-    gcs.skipped_files_count = gcs.skipped_files_count + 1
-    return 0
+    return handle_file(config, gcs_path + "/" + gz_file_name, table_spec, stream, 
+                      gz_extension, io.BytesIO(gz_data))
 
 
 def sync_compressed_file(config, gcs_path, table_spec, stream):
@@ -189,16 +180,19 @@ def sync_compressed_file(config, gcs_path, table_spec, stream):
     if file_handle is None:
         return 0
 
-    # Read the file content for decompression
-    # Note: compression.infer needs the data, but gcsfs streams it efficiently
-    decompressed_files = compression.infer(io.BytesIO(file_handle.read()), gcs_path)
+    file_bytes = file_handle.read()
 
-    for decompressed_file in decompressed_files:
-        extension = decompressed_file.name.split(".")[-1].lower()
+    # Use shared utility to extract files from zip
+    for filename, file_obj, extension in file_processing.extract_files_from_zip(file_bytes, gcs_path):
+        if filename is None:
+            # Skipped file (nested compression, logged by utility)
+            gcs.skipped_files_count = gcs.skipped_files_count + 1
+            continue
 
         if extension in ["csv", "jsonl", "gz", "txt", "tsv", "psv"]:
-            gcs_file_path = gcs_path + "/" + decompressed_file.name
-            records_streamed += handle_file(config, gcs_file_path, table_spec, stream, extension, file_handler=decompressed_file)
+            gcs_file_path = gcs_path + "/" + filename
+            records_streamed += handle_file(config, gcs_file_path, table_spec, stream, 
+                                           extension, file_handler=file_obj)
 
     return records_streamed
 
@@ -216,14 +210,8 @@ def sync_csv_file(config, file_handle, gcs_path, table_spec, stream):
         csv.field_size_limit(2147483647)
 
     ts = dict(table_spec)
-    lower = gcs_path.lower()
-    if 'delimiter' not in ts or ts.get('delimiter') in (None, ''):
-        if lower.endswith('.tsv'):
-            ts['delimiter'] = '\t'
-        elif lower.endswith('.psv'):
-            ts['delimiter'] = '|'
-        else:
-            ts['delimiter'] = ','
+    # Use shared utility to get delimiter
+    ts['delimiter'] = file_processing.get_delimiter_for_file(gcs_path, table_spec)
 
     if "properties" in stream["schema"]:
         iterator = csv_helper.get_row_iterator(
