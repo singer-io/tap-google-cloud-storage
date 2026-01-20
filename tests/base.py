@@ -36,21 +36,20 @@ class GCSBaseTest(unittest.TestCase):
         - TAP_GCS_PRIVATE_KEY_ID
         - TAP_GCS_PRIVATE_KEY
         - TAP_GCS_CLIENT_EMAIL
+        - TAP_GCS_TOKEN_URI
         """
         # Get private key and replace literal \n with actual newlines
         private_key = os.getenv('TAP_GCS_PRIVATE_KEY', '')
         if private_key and '\\n' in private_key:
             private_key = private_key.replace('\\n', '\n')
-        
+
         credentials_dict = {
             'type': os.getenv('TAP_GCS_TYPE', 'service_account'),
             'project_id': os.getenv('TAP_GCS_PROJECT_ID'),
             'private_key_id': os.getenv('TAP_GCS_PRIVATE_KEY_ID'),
             'private_key': private_key,
             'client_email': os.getenv('TAP_GCS_CLIENT_EMAIL'),
-            'auth_uri': 'https://accounts.google.com/o/oauth2/auth',
-            'token_uri': 'https://oauth2.googleapis.com/token',
-            'auth_provider_x509_cert_url': 'https://www.googleapis.com/oauth2/v1/certs'
+            'token_uri': os.getenv('TAP_GCS_TOKEN_URI', 'https://oauth2.googleapis.com/token')
         }
 
         return credentials_dict
@@ -66,7 +65,7 @@ class GCSBaseTest(unittest.TestCase):
             dict: Configuration properties including bucket and tables
         """
         props = {
-            'start_date': '2021-11-02T00:00:00Z',
+            'start_date': os.getenv('TAP_GCS_START_DATE', '2021-11-02T00:00:00Z'),
             'bucket': os.getenv('TAP_GCS_BUCKET', 'tap-gcs-test-bucket'),
             'tables': json.dumps(self.table_entry)
         }
