@@ -320,7 +320,9 @@ def sync_jsonl_file(config, iterator, gcs_path, table_spec, stream):
         value = [{field: rec[field]} for field in set(rec) - set(to_write)]
 
         if value:
-            LOGGER.warning("\"%s\" is not found in catalog and its value will be stored in the \"_sdc_extra\" field.", value)
+            # Log only field names, not actual data values
+            extra_fields = list(set(rec) - set(to_write))
+            LOGGER.warning("File '%s': Fields %s not found in catalog and will be stored in \"_sdc_extra\" field.", gcs_path, extra_fields)
             extra_data = {gcs.SDC_EXTRA_COLUMN: value}
             update_to_write = {**to_write, **extra_data}
         else:

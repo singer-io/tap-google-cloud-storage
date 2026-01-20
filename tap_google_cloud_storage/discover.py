@@ -36,7 +36,8 @@ def discover_streams(config):
 
 
 def discover_schema(config, table_spec):
-    return gcs.get_sampled_schema_for_table(config, table_spec)
+    sampled_schema = gcs.get_sampled_schema_for_table(config, table_spec)
+    return sampled_schema
 
 
 def load_metadata(table_spec, schema):
