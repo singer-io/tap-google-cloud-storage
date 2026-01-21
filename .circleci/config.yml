@@ -38,6 +38,7 @@ jobs:
             aws s3 cp s3://com-stitchdata-dev-deployment-assets/environments/tap-tester/tap_tester_sandbox dev_env.sh
             source dev_env.sh
             unset USE_STITCH_BACKEND
+            uv pip install -e .
             run-test --tap=tap-google-cloud-storage tests
 
 workflows:
