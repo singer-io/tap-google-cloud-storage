@@ -9,6 +9,7 @@ from singer import utils as singer_utils
 from singer import metadata
 from tap_google_cloud_storage import gcs
 from tap_google_cloud_storage.discover import discover_streams
+from tap_google_cloud_storage.sync import sync_stream, stream_is_selected
 from tap_google_cloud_storage.config import CONFIG_CONTRACT
 
 LOGGER = singer.get_logger()
@@ -19,7 +20,10 @@ REQUIRED_CONFIG_KEYS = [
     "private_key_id",
     "private_key",
     "client_email",
-    "bucket"
+    "token_uri",
+    "bucket",
+    "start_date",
+    "tables"
 ]
 
 
@@ -35,7 +39,24 @@ def do_discover(config):
 
 
 def do_sync(config, catalog, state, sync_start_time):
-    pass
+    LOGGER.info('Starting sync.')
+
+    for stream in catalog['streams']:
+        stream_name = stream['tap_stream_id']
+        mdata = metadata.to_map(stream['metadata'])
+        table_spec = next(s for s in config['tables'] if s['table_name'] == stream_name)
+        if not stream_is_selected(mdata):
+            continue
+
+        singer.write_state(state)
+        key_properties = metadata.get(mdata, (), 'table-key-properties')
+        singer.write_schema(stream_name, stream['schema'], key_properties)
+
+        LOGGER.info("%s: Starting sync", stream_name)
+        counter_value = sync_stream(config, state, table_spec, stream, sync_start_time)
+        LOGGER.info("%s: Completed sync (%s)", stream_name, counter_value)
+
+    LOGGER.info('Done syncing.')
 
 
 def validate_table_config(config):

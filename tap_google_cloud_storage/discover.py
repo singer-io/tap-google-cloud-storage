@@ -36,7 +36,8 @@ def discover_streams(config):
 
 
 def discover_schema(config, table_spec):
-    return gcs.get_sampled_schema_for_table(config, table_spec)
+    sampled_schema = gcs.get_sampled_schema_for_table(config, table_spec)
+    return sampled_schema
 
 
 def load_metadata(table_spec, schema):
@@ -44,7 +45,6 @@ def load_metadata(table_spec, schema):
 
     mdata = metadata.write(
         mdata, (), 'table-key-properties', table_spec.get('key_properties', []))
-
 
     # Derive a sensible replication key from schema (date-time fields) or config hints
     props = schema.get('properties', {}) or {}
