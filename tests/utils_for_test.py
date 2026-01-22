@@ -67,7 +67,8 @@ def delete_and_push_file(properties, resource_names, folder_path=None, search_pr
         else:
             gcs_path = resource_name
 
-        blob = bucket.blob(gcs_path)        # Attempt to delete the file before we start
+        # Attempt to delete the file before we start
+        blob = bucket.blob(gcs_path)
         print(f"Attempting to delete GCS file: {gcs_path}")
         try:
             blob.delete()
