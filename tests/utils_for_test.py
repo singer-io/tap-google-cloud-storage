@@ -63,7 +63,7 @@ def delete_and_push_file(properties, resource_names, folder_path=None, search_pr
         # Construct the GCS path
         search_prefix = tables[search_prefix_index].get('search_prefix', '')
         if search_prefix:
-                gcs_path = search_prefix + '/' + resource_name
+            gcs_path = search_prefix + '/' + resource_name
         else:
             gcs_path = resource_name
 
