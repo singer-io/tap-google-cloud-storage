@@ -1,6 +1,50 @@
 """
 Unified GCS utility for managing bucket operations.
-Supports: upload, list, and delete operations.
+
+This module provides a command-line interface for Google Cloud Storage operations
+including upload, list, and delete functionality.
+
+Requirements:
+    - google-cloud-storage Python package
+    - A valid config.json file with service account credentials and bucket name
+
+Configuration:
+    The config.json file must include:
+    - Service account credentials (project_id, private_key, client_email, etc.)
+    - bucket: Name of the GCS bucket to operate on
+
+Usage:
+    python gcs_utils.py [--config CONFIG_FILE] COMMAND [OPTIONS]
+
+Commands:
+    upload      Upload local files to GCS bucket
+    list        List objects in GCS bucket
+    delete      Delete object(s) from GCS bucket
+
+Examples:
+    # Upload files to a specific prefix
+    python gcs_utils.py upload --prefix exports/my_table/ file1.csv file2.csv
+
+    # Upload with custom config file
+    python gcs_utils.py --config my_custom_config.json upload --prefix exports/ file.csv
+
+    # List all objects under a prefix
+    python gcs_utils.py list --prefix exports/my_table/
+
+    # List all objects in bucket
+    python gcs_utils.py list
+
+    # Delete a specific object
+    python gcs_utils.py delete --blob exports/my_table/file1.csv
+
+    # Delete all objects under a prefix
+    python gcs_utils.py delete --prefix exports/my_table/
+
+Notes:
+    - Prefixes are automatically normalized (leading slashes removed)
+    - Upload command preserves original filenames in destination
+    - Delete with --prefix removes all matching objects (use with caution)
+    - All operations require valid GCS credentials in config file
 """
 import argparse
 import json
@@ -103,21 +147,7 @@ def cmd_delete(args):
 def main():
     parser = argparse.ArgumentParser(
         description='Unified GCS utility for bucket operations',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Upload files
-  python gcs_utils.py upload --prefix exports/my_table/ file1.csv file2.csv
-
-  # List objects
-  python gcs_utils.py list --prefix exports/my_table/
-
-  # Delete single object
-  python gcs_utils.py delete --blob exports/my_table/file1.csv
-
-  # Delete all objects under prefix
-  python gcs_utils.py delete --prefix exports/my_table/
-        """
+        formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument('--config', default='config.json',
                        help='Path to config.json (with service account fields and bucket)')
@@ -149,16 +179,3 @@ Examples:
 
 if __name__ == '__main__':
     main()
-
-
-# Usage examples (run from project root):
-
-# upload files
-# python spike\gcs_utils.py upload --prefix exports/my_table/ file1.csv file2.csv
-# python spike\gcs_utils.py --config my_custom_config.json upload --prefix exports/ file.csv
-
-#  list files
-# python spike\gcs_utils.py list --prefix exports/my_table/
-
-# python spike\gcs_utils.py delete --blob exports/my_table/file1.csv
-# python spike\gcs_utils.py delete --prefix exports/my_table/
