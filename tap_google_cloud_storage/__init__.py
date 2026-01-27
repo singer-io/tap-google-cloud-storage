@@ -20,7 +20,6 @@ REQUIRED_CONFIG_KEYS = [
     "private_key_id",
     "private_key",
     "client_email",
-    "token_uri",
     "bucket",
     "start_date",
     "tables"

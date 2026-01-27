@@ -95,6 +95,9 @@ def setup_gcs_client(config):
     Create and return a GCS client using the config directly as service account JSON.
     """
     try:
+        # Add token_uri if not present (hardcoded constant for Google OAuth2)
+        if 'token_uri' not in config:
+            config['token_uri'] = 'https://oauth2.googleapis.com/token'
         client = storage.Client.from_service_account_info(config)
         return client
 
