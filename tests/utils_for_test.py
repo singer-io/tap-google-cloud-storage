@@ -42,13 +42,9 @@ def delete_and_push_file(properties, resource_names, folder_path=None, search_pr
     credentials_info = {
         'type': 'service_account',
         'project_id': os.getenv('TAP_GCS_PROJECT_ID'),
-        'private_key_id': os.getenv('TAP_GCS_PRIVATE_KEY_ID'),
         'private_key': private_key,
         'client_email': os.getenv('TAP_GCS_CLIENT_EMAIL'),
-        'client_id': os.getenv('TAP_GCS_CLIENT_ID'),
-        'auth_uri': 'https://accounts.google.com/o/oauth2/auth',
-        'token_uri': 'https://oauth2.googleapis.com/token',
-        'auth_provider_x509_cert_url': 'https://www.googleapis.com/oauth2/v1/certs'
+        'token_uri': 'https://oauth2.googleapis.com/token'
     }
 
     credentials = service_account.Credentials.from_service_account_info(credentials_info)

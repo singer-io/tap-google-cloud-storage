@@ -15,9 +15,7 @@ from tap_google_cloud_storage.config import CONFIG_CONTRACT
 LOGGER = singer.get_logger()
 
 REQUIRED_CONFIG_KEYS = [
-    "type",
     "project_id",
-    "private_key_id",
     "private_key",
     "client_email",
     "bucket",

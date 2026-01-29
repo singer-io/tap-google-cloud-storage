@@ -31,12 +31,9 @@ class GCSBaseTest(unittest.TestCase):
         """
         GCS credentials from environment variables.
         Required environment variables:
-        - TAP_GCS_TYPE (usually "service_account")
         - TAP_GCS_PROJECT_ID
-        - TAP_GCS_PRIVATE_KEY_ID
         - TAP_GCS_PRIVATE_KEY
         - TAP_GCS_CLIENT_EMAIL
-        - TAP_GCS_TOKEN_URI
         """
         # Get private key and replace literal \n with actual newlines
         private_key = os.getenv('TAP_GCS_PRIVATE_KEY', '')
@@ -44,12 +41,9 @@ class GCSBaseTest(unittest.TestCase):
             private_key = private_key.replace('\\n', '\n')
 
         credentials_dict = {
-            'type': os.getenv('TAP_GCS_TYPE', 'service_account'),
             'project_id': os.getenv('TAP_GCS_PROJECT_ID'),
-            'private_key_id': os.getenv('TAP_GCS_PRIVATE_KEY_ID'),
             'private_key': private_key,
-            'client_email': os.getenv('TAP_GCS_CLIENT_EMAIL'),
-            'token_uri': os.getenv('TAP_GCS_TOKEN_URI', 'https://oauth2.googleapis.com/token')
+            'client_email': os.getenv('TAP_GCS_CLIENT_EMAIL')
         }
 
         return credentials_dict

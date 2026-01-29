@@ -1,7 +1,5 @@
 {
-  "type": "service_account",
   "project_id": "my-gcp-project",
-  "private_key_id": "123abc456def...",
   "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEv...END PRIVATE KEY-----\n",
   "client_email": "my-service-account@my-gcp-project.iam.gserviceaccount.com",
   "bucket": "my-gcs-bucket",
