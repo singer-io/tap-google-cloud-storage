@@ -115,9 +115,9 @@ class TestDiscovery(unittest.TestCase):
 
         from singer import metadata as singer_metadata
         mdata_map = singer_metadata.to_map(mdata)
-        replication_method = mdata_map.get((), {}).get('replication-method')
+        replication_method = mdata_map.get((), {}).get('forced-replication-method')
 
-        # The actual code sets replication-method to INCREMENTAL when datetime fields are found
+        # The actual code sets forced-replication-method to INCREMENTAL when datetime fields are found
         self.assertEqual(replication_method, 'INCREMENTAL')
 
     def test_load_metadata_sets_property_inclusion(self):

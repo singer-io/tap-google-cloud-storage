@@ -15,7 +15,7 @@ class GCSDiscoveryTest(GCSBaseTest):
     - There are no duplicate/conflicting metadata entries
     - Primary key(s) match expectations
     - '_sdc' fields are added in the schema
-    - The absence of a forced-replication-method (replication methods are non-discoverable)
+    - The presence of forced-replication-method='INCREMENTAL' when datetime fields exist
     - Primary keys have inclusion of "automatic"
     - Non-primary key fields have inclusion of "available"
     """
@@ -116,10 +116,10 @@ class GCSDiscoveryTest(GCSBaseTest):
                     self.assertIn(_sdc_field, actual_fields,
                                 msg=f"Missing _sdc field: {_sdc_field}")
 
-                # Verify the absence of a 'forced-replication-method'
-                # (replication methods are non-discoverable for file-based taps)
-                self.assertEqual(actual_replication_method, [],
-                               msg="forced-replication-method should not be set")
+                # Verify the presence of 'forced-replication-method' set to INCREMENTAL
+                # (when datetime fields are discovered)
+                self.assertEqual(actual_replication_method, 'INCREMENTAL',
+                               msg="forced-replication-method should be set to INCREMENTAL")
 
                 # Verify that primary keys are given the inclusion of automatic in metadata
                 self.assertSetEqual(expected_primary_keys, actual_automatic_fields,
