@@ -1,7 +1,16 @@
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, call
 from google.cloud import storage
-from google.api_core.exceptions import GoogleAPIError, Forbidden, NotFound
+from google.api_core.exceptions import (
+    GoogleAPIError,
+    Forbidden,
+    NotFound,
+    InternalServerError,
+    ServiceUnavailable,
+    BadGateway,
+    GatewayTimeout,
+    TooManyRequests,
+)
 
 
 class TestGCSAuthentication(unittest.TestCase):
@@ -217,18 +226,19 @@ class TestBucketValidation(unittest.TestCase):
 class TestConnectionRetry(unittest.TestCase):
 
     @patch('tap_google_cloud_storage.gcs.setup_gcs_client')
-    def test_connection_retries_on_transient_error(self, mock_setup_client):
-        """Test that connection retries on transient errors"""
+    def test_list_files_retries_on_internal_server_error(self, mock_setup_client):
+        """Test that list_files_in_bucket retries on 500 InternalServerError"""
         from tap_google_cloud_storage import gcs
 
         mock_client = MagicMock()
         mock_bucket = MagicMock()
 
-        # First call fails, second succeeds
         mock_blob = MagicMock()
         mock_blob.name = 'file.csv'
+
+        # First call raises 500, retry via _list_blobs_with_retry succeeds
         mock_bucket.list_blobs.side_effect = [
-            GoogleAPIError('Temporary error'),
+            InternalServerError('Backend error'),
             [mock_blob]
         ]
 
@@ -237,10 +247,190 @@ class TestConnectionRetry(unittest.TestCase):
 
         config = {'bucket': 'test-bucket'}
 
-        # This would need retry logic implemented in the actual code
-        # For now, we just verify the exception is raised
-        with self.assertRaises(GoogleAPIError):
-            list(gcs.list_files_in_bucket(config))
+        files = list(gcs.list_files_in_bucket(config))
+
+        self.assertEqual(len(files), 1)
+        self.assertEqual(files[0].name, 'file.csv')
+        # list_blobs should have been called twice (once in generator, once in retry helper)
+        self.assertEqual(mock_bucket.list_blobs.call_count, 2)
+
+    @patch('tap_google_cloud_storage.gcs.setup_gcs_client')
+    def test_list_files_retries_on_service_unavailable(self, mock_setup_client):
+        """Test that list_files_in_bucket retries on 503 ServiceUnavailable"""
+        from tap_google_cloud_storage import gcs
+
+        mock_client = MagicMock()
+        mock_bucket = MagicMock()
+
+        mock_blob = MagicMock()
+        mock_blob.name = 'data.csv'
+
+        mock_bucket.list_blobs.side_effect = [
+            ServiceUnavailable('Service unavailable'),
+            [mock_blob]
+        ]
+
+        mock_client.bucket.return_value = mock_bucket
+        mock_setup_client.return_value = mock_client
+
+        config = {'bucket': 'test-bucket'}
+
+        files = list(gcs.list_files_in_bucket(config))
+        self.assertEqual(len(files), 1)
+
+    @patch('tap_google_cloud_storage.gcs.setup_gcs_client')
+    def test_get_file_handle_retries_on_5xx(self, mock_setup_client):
+        """Test that get_file_handle retries on transient server errors"""
+        from tap_google_cloud_storage import gcs
+
+        mock_client = MagicMock()
+        mock_bucket = MagicMock()
+        mock_blob = MagicMock()
+        mock_file_handle = MagicMock()
+
+        # First open raises 503, second succeeds
+        mock_blob.open.side_effect = [
+            ServiceUnavailable('Service unavailable'),
+            mock_file_handle
+        ]
+        mock_bucket.blob.return_value = mock_blob
+        mock_client.bucket.return_value = mock_bucket
+        mock_setup_client.return_value = mock_client
+
+        config = {'bucket': 'test-bucket'}
+
+        result = gcs.get_file_handle(config, 'exports/data.csv')
+
+        self.assertIsNotNone(result)
+        self.assertEqual(mock_blob.open.call_count, 2)
+
+    @patch('tap_google_cloud_storage.gcs.setup_gcsfs_client')
+    def test_get_gcsfs_file_handle_retries_on_5xx(self, mock_setup_gcsfs):
+        """Test that get_gcsfs_file_handle retries on transient server errors"""
+        from tap_google_cloud_storage import gcs
+
+        mock_fs = MagicMock()
+        mock_handle = MagicMock()
+
+        mock_fs.open.side_effect = [
+            InternalServerError('Internal error'),
+            mock_handle
+        ]
+        mock_setup_gcsfs.return_value = mock_fs
+
+        config = {'bucket': 'test-bucket'}
+
+        result = gcs.get_gcsfs_file_handle(config, 'exports/file.parquet')
+
+        self.assertIsNotNone(result)
+        self.assertEqual(mock_fs.open.call_count, 2)
+
+    @patch('tap_google_cloud_storage.gcs.setup_gcs_client')
+    def test_get_file_handle_returns_none_on_non_retryable_error(self, mock_setup_client):
+        """Test that get_file_handle returns None on non-retryable errors like 404"""
+        from tap_google_cloud_storage import gcs
+
+        mock_client = MagicMock()
+        mock_bucket = MagicMock()
+        mock_blob = MagicMock()
+
+        mock_blob.open.side_effect = NotFound('File not found')
+        mock_bucket.blob.return_value = mock_blob
+        mock_client.bucket.return_value = mock_bucket
+        mock_setup_client.return_value = mock_client
+
+        config = {'bucket': 'test-bucket'}
+
+        result = gcs.get_file_handle(config, 'exports/missing.csv')
+
+        # Non-retryable errors should not retry, should return None
+        self.assertIsNone(result)
+        self.assertEqual(mock_blob.open.call_count, 1)
+
+    @patch('tap_google_cloud_storage.gcs.setup_gcs_client')
+    def test_get_file_handle_raises_after_max_retries_exhausted(self, mock_setup_client):
+        """Test that get_file_handle raises after all retries are exhausted"""
+        from tap_google_cloud_storage import gcs
+
+        mock_client = MagicMock()
+        mock_bucket = MagicMock()
+        mock_blob = MagicMock()
+
+        # Always fails with 503
+        mock_blob.open.side_effect = ServiceUnavailable('Service unavailable')
+        mock_bucket.blob.return_value = mock_blob
+        mock_client.bucket.return_value = mock_bucket
+        mock_setup_client.return_value = mock_client
+
+        config = {'bucket': 'test-bucket'}
+
+        with self.assertRaises(ServiceUnavailable):
+            gcs.get_file_handle(config, 'exports/data.csv')
+
+        # Should have retried MAX_RETRIES times
+        self.assertEqual(mock_blob.open.call_count, gcs.MAX_RETRIES)
+
+    @patch('tap_google_cloud_storage.gcs.setup_gcs_client')
+    def test_download_blob_with_retry_retries_on_bad_gateway(self, mock_setup_client):
+        """Test that _download_blob_with_retry retries on 502 BadGateway"""
+        from tap_google_cloud_storage import gcs
+
+        mock_blob = MagicMock()
+        mock_blob.download_as_bytes.side_effect = [
+            BadGateway('Bad gateway'),
+            b'file content'
+        ]
+
+        result = gcs._download_blob_with_retry(mock_blob)
+
+        self.assertEqual(result, b'file content')
+        self.assertEqual(mock_blob.download_as_bytes.call_count, 2)
+
+    @patch('tap_google_cloud_storage.gcs.setup_gcs_client')
+    def test_download_blob_with_retry_retries_on_too_many_requests(self, mock_setup_client):
+        """Test that _download_blob_with_retry retries on 429 TooManyRequests"""
+        from tap_google_cloud_storage import gcs
+
+        mock_blob = MagicMock()
+        mock_blob.download_as_bytes.side_effect = [
+            TooManyRequests('Rate limit exceeded'),
+            b'data'
+        ]
+
+        result = gcs._download_blob_with_retry(mock_blob)
+
+        self.assertEqual(result, b'data')
+        self.assertEqual(mock_blob.download_as_bytes.call_count, 2)
+
+    @patch('tap_google_cloud_storage.gcs.setup_gcs_client')
+    def test_download_blob_with_retry_retries_on_gateway_timeout(self, mock_setup_client):
+        """Test that _download_blob_with_retry retries on 504 GatewayTimeout"""
+        from tap_google_cloud_storage import gcs
+
+        mock_blob = MagicMock()
+        mock_blob.download_as_bytes.side_effect = [
+            GatewayTimeout('Gateway timeout'),
+            GatewayTimeout('Gateway timeout'),
+            b'data'
+        ]
+
+        result = gcs._download_blob_with_retry(mock_blob)
+
+        self.assertEqual(result, b'data')
+        self.assertEqual(mock_blob.download_as_bytes.call_count, 3)
+
+    def test_non_retryable_errors_propagate_immediately(self):
+        """Test that non-retryable errors (4xx) are not retried"""
+        from tap_google_cloud_storage import gcs
+
+        mock_blob = MagicMock()
+        mock_blob.download_as_bytes.side_effect = Forbidden('Access denied')
+
+        with self.assertRaises(Forbidden):
+            gcs._download_blob_with_retry(mock_blob)
+
+        # Should only be called once - no retries for non-retryable errors
+        self.assertEqual(mock_blob.download_as_bytes.call_count, 1)
 
 
 if __name__ == '__main__':

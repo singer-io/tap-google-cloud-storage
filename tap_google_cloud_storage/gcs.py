@@ -7,7 +7,15 @@ import gzip
 import struct
 import itertools
 import singer
+import backoff
 from google.cloud import storage
+from google.api_core.exceptions import (
+    InternalServerError,
+    BadGateway,
+    ServiceUnavailable,
+    GatewayTimeout,
+    TooManyRequests,
+)
 import gcsfs
 from singer_encodings import (
     csv as singer_csv,
@@ -19,6 +27,30 @@ from singer_encodings import (
 from tap_google_cloud_storage import conversion
 
 LOGGER = singer.get_logger()
+
+# Exceptions that are safe to retry (transient server-side / rate-limit errors)
+RETRYABLE_EXCEPTIONS = (
+    InternalServerError,   # 500
+    BadGateway,            # 502
+    ServiceUnavailable,    # 503
+    GatewayTimeout,        # 504
+    TooManyRequests,       # 429
+    ConnectionError,
+    ConnectionResetError,
+)
+
+MAX_RETRIES = 5  # Total retry attempts for backoff decorator
+
+
+def log_backoff(details):
+    """Log a message each time a retry occurs."""
+    LOGGER.warning(
+        'Error detected (%s). Retrying request in %.1f seconds — attempt %d of %d.',
+        details.get('exception', 'unknown'),
+        details.get('wait', 0),
+        details.get('tries', 0),
+        MAX_RETRIES,
+    )
 
 # Global GCS filesystem instance for streaming Parquet/Avro files
 fs = None
@@ -90,6 +122,13 @@ def get_file_name_from_gzfile(filename=None, fileobj=None):
 
     return None
 
+@backoff.on_exception(
+    backoff.expo,
+    RETRYABLE_EXCEPTIONS,
+    max_tries=MAX_RETRIES,
+    on_backoff=log_backoff,
+    factor=2,
+)
 def setup_gcs_client(config):
     """
     Create and return a GCS client using the config directly as service account JSON.
@@ -101,6 +140,9 @@ def setup_gcs_client(config):
         client = storage.Client.from_service_account_info(config)
         return client
 
+    except RETRYABLE_EXCEPTIONS:
+        LOGGER.warning("Transient error while creating GCS client — will retry.")
+        raise
     except Exception as e:
         LOGGER.error("Failed to create GCS client: %s", e)
         raise
@@ -139,14 +181,37 @@ def list_files_in_bucket(config):
         blobs = bucket.list_blobs(prefix=prefix)
         for blob in blobs:
             yield blob
+    except RETRYABLE_EXCEPTIONS as e:
+        LOGGER.warning("Transient error listing files in GCS bucket: %s — retrying via _list_blobs_with_retry", e)
+        yield from _list_blobs_with_retry(bucket, prefix)
     except Exception as e:
         LOGGER.error("Failed to list files in GCS bucket: %s", e)
         raise
 
+
+@backoff.on_exception(
+    backoff.expo,
+    RETRYABLE_EXCEPTIONS,
+    max_tries=MAX_RETRIES,
+    on_backoff=log_backoff,
+    factor=2,
+)
+def _list_blobs_with_retry(bucket, prefix):
+    """Non-generator wrapper so backoff can retry the full blob listing."""
+    return list(bucket.list_blobs(prefix=prefix))
+
+@backoff.on_exception(
+    backoff.expo,
+    RETRYABLE_EXCEPTIONS,
+    max_tries=MAX_RETRIES,
+    on_backoff=log_backoff,
+    factor=2,
+)
 def get_file_handle(config, gcs_path):
     """
     Get a streaming file handle for CSV/JSONL files.
     Returns a file-like object that can be read in chunks without loading entire file into memory.
+    Retries automatically on transient 5xx / 429 errors.
     """
     try:
         client = setup_gcs_client(config)
@@ -154,20 +219,34 @@ def get_file_handle(config, gcs_path):
         blob = bucket.blob(gcs_path)
         # Open blob as streaming reader - doesn't load entire file into memory
         return blob.open('rb')
+    except RETRYABLE_EXCEPTIONS:
+        # Let backoff decorator handle the retry
+        raise
     except Exception as exc:
         LOGGER.warning("Failed to open streaming handle for %s: %s", gcs_path, exc)
         return None
 
+@backoff.on_exception(
+    backoff.expo,
+    RETRYABLE_EXCEPTIONS,
+    max_tries=MAX_RETRIES,
+    on_backoff=log_backoff,
+    factor=2,
+)
 def get_gcsfs_file_handle(config, gcs_path):
     """
     Get a streaming file handle for Parquet/Avro/compressed files using gcsfs.
     This provides random access (seeking) without downloading the entire file.
+    Retries automatically on transient 5xx / 429 errors.
     """
     try:
         bucket = config['bucket']
         fs_client = setup_gcsfs_client(config)
         # Open file with gcsfs - supports streaming with random access
         return fs_client.open(f'gs://{bucket}/{gcs_path}', 'rb')
+    except RETRYABLE_EXCEPTIONS:
+        # Let backoff decorator handle the retry
+        raise
     except Exception as exc:
         LOGGER.warning("Failed to open streaming handle for %s: %s", gcs_path, exc)
         return None
@@ -414,6 +493,18 @@ def sampling_zip_file(table_spec, gcs_path, data, sample_rate, max_records=1000)
         LOGGER.warning('Failed to process ZIP file %s: %s', gcs_path, e)
         skipped_files_count += 1
 
+@backoff.on_exception(
+    backoff.expo,
+    RETRYABLE_EXCEPTIONS,
+    max_tries=MAX_RETRIES,
+    on_backoff=log_backoff,
+    factor=2,
+)
+def _download_blob_with_retry(blob):
+    """Download blob contents with automatic retry on transient errors."""
+    return blob.download_as_bytes()
+
+
 def get_files_to_sample(config, gcs_files, max_files):
     """
     Prepare GCS files for sampling, downloading and extracting compressed files.
@@ -447,7 +538,10 @@ def get_files_to_sample(config, gcs_files, max_files):
 
         try:
             blob = bucket.blob(file_key)
-            data = blob.download_as_bytes()
+            data = _download_blob_with_retry(blob)
+        except RETRYABLE_EXCEPTIONS as e:
+            LOGGER.error('Transient error downloading %s after %d retries: %s', file_key, MAX_RETRIES, e)
+            raise
         except Exception as e:
             LOGGER.warning('Skipping %s due to download error: %s', file_key, e)
             skipped_files_count += 1
