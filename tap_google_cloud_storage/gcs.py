@@ -139,11 +139,10 @@ def setup_gcs_client(config):
             config['token_uri'] = 'https://oauth2.googleapis.com/token'
         client = storage.Client.from_service_account_info(config)
         return client
-
-    except RETRYABLE_EXCEPTIONS:
-        LOGGER.warning("Transient error while creating GCS client — will retry.")
-        raise
     except Exception as e:
+        # Let backoff handle logging and retries for retryable exceptions
+        if isinstance(e, RETRYABLE_EXCEPTIONS):
+            raise
         LOGGER.error("Failed to create GCS client: %s", e)
         raise
 
