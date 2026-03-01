@@ -15,7 +15,6 @@ from google.api_core.exceptions import (
 def _patch_backoff_sleep():
     """Patch backoff's sleep so retries run instantly in tests."""
     return patch('time.sleep', return_value=None)
-
 class TestGCSAuthentication(unittest.TestCase):
 
     @patch('google.cloud.storage.Client.from_service_account_info')
