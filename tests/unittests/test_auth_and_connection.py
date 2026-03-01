@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import patch, MagicMock
 from google.cloud import storage
 from google.api_core.exceptions import (
     GoogleAPIError,
