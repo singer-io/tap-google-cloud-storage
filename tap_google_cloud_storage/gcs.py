@@ -39,7 +39,7 @@ RETRYABLE_EXCEPTIONS = (
     ConnectionResetError,
 )
 
-MAX_RETRIES = 5  # Total retry attempts for backoff decorator
+MAX_TRIES = 5  # Maximum total attempts (initial + retries) for backoff decorator
 
 
 def log_backoff(details):
@@ -49,7 +49,7 @@ def log_backoff(details):
         details.get('exception', 'unknown'),
         details.get('wait', 0),
         details.get('tries', 0),
-        MAX_RETRIES,
+        MAX_TRIES,
     )
 
 # Global GCS filesystem instance for streaming Parquet/Avro files
@@ -125,7 +125,7 @@ def get_file_name_from_gzfile(filename=None, fileobj=None):
 @backoff.on_exception(
     backoff.expo,
     RETRYABLE_EXCEPTIONS,
-    max_tries=MAX_RETRIES,
+    max_tries=MAX_TRIES,
     on_backoff=log_backoff,
     factor=2,
 )
@@ -177,10 +177,12 @@ def list_files_in_bucket(config):
     bucket = client.bucket(bucket_name)
 
     try:
-        # Use the backoff-enabled helper to retrieve the full blob listing
-        blobs = _list_blobs_with_retry(bucket, prefix)
+        blobs = bucket.list_blobs(prefix=prefix)
         for blob in blobs:
             yield blob
+    except RETRYABLE_EXCEPTIONS as e:
+        LOGGER.warning("Transient error listing files in GCS bucket: %s — retrying via _list_blobs_with_retry", e)
+        yield from _list_blobs_with_retry(bucket, prefix)
     except Exception as e:
         LOGGER.error("Failed to list files in GCS bucket: %s", e)
         raise
@@ -189,27 +191,17 @@ def list_files_in_bucket(config):
 @backoff.on_exception(
     backoff.expo,
     RETRYABLE_EXCEPTIONS,
-    max_tries=MAX_RETRIES,
+    max_tries=MAX_TRIES,
     on_backoff=log_backoff,
     factor=2,
 )
 def _list_blobs_with_retry(bucket, prefix):
-    """
-    Generator wrapper so backoff can retry the full blob listing without
-    materializing all results in memory.
-
-    Note: On a retryable exception, the backoff decorator will re-run this
-    function from the beginning, so callers should be prepared for the
-    listing to restart.
-    """
-    blob_iter = bucket.list_blobs(prefix=prefix)
-    for page in blob_iter.pages:
-        for blob in page:
-            yield blob
+    """Non-generator wrapper so backoff can retry the full blob listing."""
+    return list(bucket.list_blobs(prefix=prefix))
 @backoff.on_exception(
     backoff.expo,
     RETRYABLE_EXCEPTIONS,
-    max_tries=MAX_RETRIES,
+    max_tries=MAX_TRIES,
     on_backoff=log_backoff,
     factor=2,
 )
@@ -235,7 +227,7 @@ def get_file_handle(config, gcs_path):
 @backoff.on_exception(
     backoff.expo,
     RETRYABLE_EXCEPTIONS,
-    max_tries=MAX_RETRIES,
+    max_tries=MAX_TRIES,
     on_backoff=log_backoff,
     factor=2,
 )
@@ -502,7 +494,7 @@ def sampling_zip_file(table_spec, gcs_path, data, sample_rate, max_records=1000)
 @backoff.on_exception(
     backoff.expo,
     RETRYABLE_EXCEPTIONS,
-    max_tries=MAX_RETRIES,
+    max_tries=MAX_TRIES,
     on_backoff=log_backoff,
     factor=2,
 )
@@ -546,7 +538,7 @@ def get_files_to_sample(config, gcs_files, max_files):
             blob = bucket.blob(file_key)
             data = _download_blob_with_retry(blob)
         except RETRYABLE_EXCEPTIONS as e:
-            LOGGER.error('Transient error downloading %s after %d retries: %s', file_key, MAX_RETRIES, e)
+            LOGGER.error('Transient error downloading %s after %d tries: %s', file_key, MAX_TRIES, e)
             raise
         except Exception as e:
             LOGGER.warning('Skipping %s due to download error: %s', file_key, e)
