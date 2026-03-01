@@ -196,9 +196,18 @@ def list_files_in_bucket(config):
     factor=2,
 )
 def _list_blobs_with_retry(bucket, prefix):
-    """Non-generator wrapper so backoff can retry the full blob listing."""
-    return list(bucket.list_blobs(prefix=prefix))
+    """
+    Generator wrapper so backoff can retry the full blob listing without
+    materializing all results in memory.
 
+    Note: On a retryable exception, the backoff decorator will re-run this
+    function from the beginning, so callers should be prepared for the
+    listing to restart.
+    """
+    blob_iter = bucket.list_blobs(prefix=prefix)
+    for page in blob_iter.pages:
+        for blob in page:
+            yield blob
 @backoff.on_exception(
     backoff.expo,
     RETRYABLE_EXCEPTIONS,
