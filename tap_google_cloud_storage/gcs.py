@@ -139,10 +139,9 @@ def setup_gcs_client(config):
             config['token_uri'] = 'https://oauth2.googleapis.com/token'
         client = storage.Client.from_service_account_info(config)
         return client
+    except RETRYABLE_EXCEPTIONS:
+        raise
     except Exception as e:
-        # Let backoff handle logging and retries for retryable exceptions
-        if isinstance(e, RETRYABLE_EXCEPTIONS):
-            raise
         LOGGER.error("Failed to create GCS client: %s", e)
         raise
 
@@ -537,9 +536,6 @@ def get_files_to_sample(config, gcs_files, max_files):
         try:
             blob = bucket.blob(file_key)
             data = _download_blob_with_retry(blob)
-        except RETRYABLE_EXCEPTIONS as e:
-            LOGGER.error('Transient error downloading %s after %d tries: %s', file_key, MAX_TRIES, e)
-            raise
         except Exception as e:
             LOGGER.warning('Skipping %s due to download error: %s', file_key, e)
             skipped_files_count += 1
