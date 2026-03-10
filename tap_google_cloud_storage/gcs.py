@@ -9,13 +9,6 @@ import itertools
 import singer
 import backoff
 from google.cloud import storage
-from google.api_core.exceptions import (
-    InternalServerError,
-    BadGateway,
-    ServiceUnavailable,
-    GatewayTimeout,
-    TooManyRequests,
-)
 import gcsfs
 from singer_encodings import (
     csv as singer_csv,
@@ -25,32 +18,11 @@ from singer_encodings import (
     compression
 )
 from tap_google_cloud_storage import conversion
+from tap_google_cloud_storage.exceptions import RETRYABLE_EXCEPTIONS, RATE_LIMIT_EXCEPTIONS
 
 LOGGER = singer.get_logger()
 
-# Exceptions that are safe to retry (transient server-side / rate-limit errors)
-RETRYABLE_EXCEPTIONS = (
-    InternalServerError,   # 500
-    BadGateway,            # 502
-    ServiceUnavailable,    # 503
-    GatewayTimeout,        # 504
-    TooManyRequests,       # 429
-    ConnectionError,
-    ConnectionResetError,
-)
-
 MAX_TRIES = 5  # Maximum total attempts (initial + retries) for backoff decorator
-
-
-def log_backoff(details):
-    """Log a message each time a retry occurs."""
-    LOGGER.warning(
-        'Error detected (%s). Retrying request in %.1f seconds — attempt %d of %d.',
-        details.get('exception', 'unknown'),
-        details.get('wait', 0),
-        details.get('tries', 0),
-        MAX_TRIES,
-    )
 
 # Global GCS filesystem instance for streaming Parquet/Avro files
 fs = None
@@ -124,9 +96,15 @@ def get_file_name_from_gzfile(filename=None, fileobj=None):
 
 @backoff.on_exception(
     backoff.expo,
+    RATE_LIMIT_EXCEPTIONS,
+    max_tries=6,
+    max_time=60,
+    jitter=None,
+)
+@backoff.on_exception(
+    backoff.expo,
     RETRYABLE_EXCEPTIONS,
     max_tries=MAX_TRIES,
-    on_backoff=log_backoff,
     factor=2,
 )
 def setup_gcs_client(config):
@@ -185,9 +163,15 @@ def list_files_in_bucket(config):
 
 @backoff.on_exception(
     backoff.expo,
+    RATE_LIMIT_EXCEPTIONS,
+    max_tries=6,
+    max_time=60,
+    jitter=None,
+)
+@backoff.on_exception(
+    backoff.expo,
     RETRYABLE_EXCEPTIONS,
     max_tries=MAX_TRIES,
-    on_backoff=log_backoff,
     factor=2,
 )
 def _list_blobs_with_retry(bucket, prefix):
@@ -195,9 +179,15 @@ def _list_blobs_with_retry(bucket, prefix):
     return list(bucket.list_blobs(prefix=prefix))
 @backoff.on_exception(
     backoff.expo,
+    RATE_LIMIT_EXCEPTIONS,
+    max_tries=6,
+    max_time=60,
+    jitter=None,
+)
+@backoff.on_exception(
+    backoff.expo,
     RETRYABLE_EXCEPTIONS,
     max_tries=MAX_TRIES,
-    on_backoff=log_backoff,
     factor=2,
 )
 def get_file_handle(config, gcs_path):
@@ -221,9 +211,15 @@ def get_file_handle(config, gcs_path):
 
 @backoff.on_exception(
     backoff.expo,
+    RATE_LIMIT_EXCEPTIONS,
+    max_tries=6,
+    max_time=60,
+    jitter=None,
+)
+@backoff.on_exception(
+    backoff.expo,
     RETRYABLE_EXCEPTIONS,
     max_tries=MAX_TRIES,
-    on_backoff=log_backoff,
     factor=2,
 )
 def get_gcsfs_file_handle(config, gcs_path):
@@ -488,9 +484,15 @@ def sampling_zip_file(table_spec, gcs_path, data, sample_rate, max_records=1000)
 
 @backoff.on_exception(
     backoff.expo,
+    RATE_LIMIT_EXCEPTIONS,
+    max_tries=6,
+    max_time=60,
+    jitter=None,
+)
+@backoff.on_exception(
+    backoff.expo,
     RETRYABLE_EXCEPTIONS,
     max_tries=MAX_TRIES,
-    on_backoff=log_backoff,
     factor=2,
 )
 def _download_blob_with_retry(blob):

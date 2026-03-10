@@ -17,7 +17,8 @@ from singer_encodings import (
     parquet
 )
 from tap_google_cloud_storage import gcs
-from tap_google_cloud_storage.gcs import get_file_name_from_gzfile, RETRYABLE_EXCEPTIONS
+from tap_google_cloud_storage.gcs import get_file_name_from_gzfile
+from tap_google_cloud_storage.exceptions import RETRYABLE_EXCEPTIONS
 
 
 LOGGER = singer.get_logger()
