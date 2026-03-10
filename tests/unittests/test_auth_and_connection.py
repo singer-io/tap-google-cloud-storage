@@ -239,7 +239,7 @@ class TestConnectionRetry(unittest.TestCase):
         mock_blob = MagicMock()
         mock_blob.name = 'file.csv'
 
-        # First call raises 500, retry via _list_blobs_with_retry succeeds
+        # First call raises 500, backoff retries and second call succeeds
         mock_bucket.list_blobs.side_effect = [
             InternalServerError('Backend error'),
             [mock_blob]
@@ -254,7 +254,7 @@ class TestConnectionRetry(unittest.TestCase):
 
         self.assertEqual(len(files), 1)
         self.assertEqual(files[0].name, 'file.csv')
-        # list_blobs should have been called twice (once in generator, once in retry helper)
+        # list_blobs called twice: first fails, backoff retries, second succeeds
         self.assertEqual(mock_bucket.list_blobs.call_count, 2)
 
     @_patch_backoff_sleep()
@@ -269,6 +269,7 @@ class TestConnectionRetry(unittest.TestCase):
         mock_blob = MagicMock()
         mock_blob.name = 'data.csv'
 
+        # First call raises 503, backoff retries and second call succeeds
         mock_bucket.list_blobs.side_effect = [
             ServiceUnavailable('Service unavailable'),
             [mock_blob]
@@ -281,6 +282,8 @@ class TestConnectionRetry(unittest.TestCase):
 
         files = list(gcs.list_files_in_bucket(config))
         self.assertEqual(len(files), 1)
+        # list_blobs called twice: first fails, backoff retries, second succeeds
+        self.assertEqual(mock_bucket.list_blobs.call_count, 2)
 
     @_patch_backoff_sleep()
     @patch('tap_google_cloud_storage.gcs.setup_gcs_client')

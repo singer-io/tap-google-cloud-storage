@@ -175,16 +175,12 @@ def list_files_in_bucket(config):
 
     bucket = client.bucket(bucket_name)
 
-    try:
-        blobs = bucket.list_blobs(prefix=prefix)
-        for blob in blobs:
-            yield blob
-    except RETRYABLE_EXCEPTIONS as e:
-        LOGGER.warning("Transient error listing files in GCS bucket: %s — retrying via _list_blobs_with_retry", e)
-        yield from _list_blobs_with_retry(bucket, prefix)
-    except Exception as e:
-        LOGGER.error("Failed to list files in GCS bucket: %s", e)
-        raise
+    # Use the backoff-enabled helper to retrieve the full blob listing
+    # so that transient errors are retried before any blobs are yielded,
+    # avoiding duplicates that would occur with a yield-then-retry pattern.
+    blobs = _list_blobs_with_retry(bucket, prefix)
+    for blob in blobs:
+        yield blob
 
 
 @backoff.on_exception(
