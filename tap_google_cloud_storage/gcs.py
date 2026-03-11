@@ -18,7 +18,12 @@ from singer_encodings import (
     compression
 )
 from tap_google_cloud_storage import conversion
-from tap_google_cloud_storage.exceptions import RETRYABLE_EXCEPTIONS, RATE_LIMIT_EXCEPTIONS
+from tap_google_cloud_storage.exceptions import (
+    GCSBackoffError,
+    GCSRateLimitError,
+    RAW_EXCEPTIONS,
+    raise_for_error,
+)
 
 LOGGER = singer.get_logger()
 
@@ -96,14 +101,14 @@ def get_file_name_from_gzfile(filename=None, fileobj=None):
 
 @backoff.on_exception(
     backoff.expo,
-    RATE_LIMIT_EXCEPTIONS,
+    GCSRateLimitError,
     max_tries=6,
     max_time=60,
     jitter=None,
 )
 @backoff.on_exception(
     backoff.expo,
-    RETRYABLE_EXCEPTIONS,
+    GCSBackoffError,
     max_tries=MAX_TRIES,
     factor=2,
 )
@@ -117,8 +122,8 @@ def setup_gcs_client(config):
             config['token_uri'] = 'https://oauth2.googleapis.com/token'
         client = storage.Client.from_service_account_info(config)
         return client
-    except RETRYABLE_EXCEPTIONS:
-        raise
+    except RAW_EXCEPTIONS as e:
+        raise_for_error(e)
     except Exception as e:
         LOGGER.error("Failed to create GCS client: %s", e)
         raise
@@ -163,30 +168,33 @@ def list_files_in_bucket(config):
 
 @backoff.on_exception(
     backoff.expo,
-    RATE_LIMIT_EXCEPTIONS,
+    GCSRateLimitError,
     max_tries=6,
     max_time=60,
     jitter=None,
 )
 @backoff.on_exception(
     backoff.expo,
-    RETRYABLE_EXCEPTIONS,
+    GCSBackoffError,
     max_tries=MAX_TRIES,
     factor=2,
 )
 def _list_blobs_with_retry(bucket, prefix):
     """Non-generator wrapper so backoff can retry the full blob listing."""
-    return list(bucket.list_blobs(prefix=prefix))
+    try:
+        return list(bucket.list_blobs(prefix=prefix))
+    except RAW_EXCEPTIONS as e:
+        raise_for_error(e)
 @backoff.on_exception(
     backoff.expo,
-    RATE_LIMIT_EXCEPTIONS,
+    GCSRateLimitError,
     max_tries=6,
     max_time=60,
     jitter=None,
 )
 @backoff.on_exception(
     backoff.expo,
-    RETRYABLE_EXCEPTIONS,
+    GCSBackoffError,
     max_tries=MAX_TRIES,
     factor=2,
 )
@@ -202,23 +210,22 @@ def get_file_handle(config, gcs_path):
         blob = bucket.blob(gcs_path)
         # Open blob as streaming reader - doesn't load entire file into memory
         return blob.open('rb')
-    except RETRYABLE_EXCEPTIONS:
-        # Let backoff decorator handle the retry
-        raise
+    except RAW_EXCEPTIONS as e:
+        raise_for_error(e)
     except Exception as exc:
         LOGGER.warning("Failed to open streaming handle for %s: %s", gcs_path, exc)
         return None
 
 @backoff.on_exception(
     backoff.expo,
-    RATE_LIMIT_EXCEPTIONS,
+    GCSRateLimitError,
     max_tries=6,
     max_time=60,
     jitter=None,
 )
 @backoff.on_exception(
     backoff.expo,
-    RETRYABLE_EXCEPTIONS,
+    GCSBackoffError,
     max_tries=MAX_TRIES,
     factor=2,
 )
@@ -233,9 +240,8 @@ def get_gcsfs_file_handle(config, gcs_path):
         fs_client = setup_gcsfs_client(config)
         # Open file with gcsfs - supports streaming with random access
         return fs_client.open(f'gs://{bucket}/{gcs_path}', 'rb')
-    except RETRYABLE_EXCEPTIONS:
-        # Let backoff decorator handle the retry
-        raise
+    except RAW_EXCEPTIONS as e:
+        raise_for_error(e)
     except Exception as exc:
         LOGGER.warning("Failed to open streaming handle for %s: %s", gcs_path, exc)
         return None
@@ -484,20 +490,23 @@ def sampling_zip_file(table_spec, gcs_path, data, sample_rate, max_records=1000)
 
 @backoff.on_exception(
     backoff.expo,
-    RATE_LIMIT_EXCEPTIONS,
+    GCSRateLimitError,
     max_tries=6,
     max_time=60,
     jitter=None,
 )
 @backoff.on_exception(
     backoff.expo,
-    RETRYABLE_EXCEPTIONS,
+    GCSBackoffError,
     max_tries=MAX_TRIES,
     factor=2,
 )
 def _download_blob_with_retry(blob):
     """Download blob contents with automatic retry on transient errors."""
-    return blob.download_as_bytes()
+    try:
+        return blob.download_as_bytes()
+    except RAW_EXCEPTIONS as e:
+        raise_for_error(e)
 
 
 def get_files_to_sample(config, gcs_files, max_files):

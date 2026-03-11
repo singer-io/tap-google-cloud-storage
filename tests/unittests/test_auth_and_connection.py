@@ -11,6 +11,7 @@ from google.api_core.exceptions import (
     GatewayTimeout,
     TooManyRequests,
 )
+from tap_google_cloud_storage.exceptions import GCSServiceUnavailableError
 
 def _patch_backoff_sleep():
     """Patch backoff's sleep so retries run instantly in tests."""
@@ -375,7 +376,7 @@ class TestConnectionRetry(unittest.TestCase):
 
         config = {'bucket': 'test-bucket'}
 
-        with self.assertRaises(ServiceUnavailable):
+        with self.assertRaises(GCSServiceUnavailableError):
             gcs.get_file_handle(config, 'exports/data.csv')
 
         # Should have been called MAX_TRIES times (initial + retries)

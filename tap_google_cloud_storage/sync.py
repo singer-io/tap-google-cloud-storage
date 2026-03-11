@@ -18,7 +18,7 @@ from singer_encodings import (
 )
 from tap_google_cloud_storage import gcs
 from tap_google_cloud_storage.gcs import get_file_name_from_gzfile
-from tap_google_cloud_storage.exceptions import RETRYABLE_EXCEPTIONS
+from tap_google_cloud_storage.exceptions import GCSBackoffError, GCSRateLimitError
 
 
 LOGGER = singer.get_logger()
@@ -71,7 +71,7 @@ def sync_table_file(config, gcs_path, table_spec, stream):
         if extension in ["csv", "jsonl", "txt", "tsv", "psv", "parquet", "avro"]:
             return handle_file(config, gcs_path, table_spec, stream, extension)
         LOGGER.warning('"%s" having the ".%s" extension will not be synced.', gcs_path, extension)
-    except RETRYABLE_EXCEPTIONS:
+    except (GCSBackoffError, GCSRateLimitError):
         # Let transient server errors propagate so the caller can surface them.
         # These have already been retried by the backoff decorators in gcs.py.
         raise
