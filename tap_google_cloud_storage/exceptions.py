@@ -88,10 +88,14 @@ ERROR_CODE_EXCEPTION_MAPPING = {
     },
 }
 
-# Tuple of raw exceptions to catch before translating
-RAW_EXCEPTIONS = tuple(
-    exc_type for exc_type in ERROR_CODE_EXCEPTION_MAPPING.keys()
-    if issubclass(exc_type, GoogleAPICallError)
+# Tuple of raw Google API exceptions to catch before translating.
+# Keep this explicit so static analyzers can verify `except RAW_EXCEPTIONS`.
+RAW_EXCEPTIONS = (
+    InternalServerError,
+    BadGateway,
+    ServiceUnavailable,
+    GatewayTimeout,
+    TooManyRequests,
 )
 
 
