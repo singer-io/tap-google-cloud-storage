@@ -111,6 +111,16 @@ class TestSyncStream(unittest.TestCase):
         bookmark_value = args[3]
         self.assertEqual(bookmark_value, self.sync_start_time.isoformat())
 
+    @patch('tap_google_cloud_storage.gcs.get_input_files_for_table')
+    def test_sync_stream_raises_for_naive_last_modified(self, mock_get_files):
+        """Test that sync fails fast if a blob timestamp is timezone-naive"""
+        mock_get_files.return_value = [
+            {'key': 'file1.csv', 'last_modified': datetime(2026, 1, 10, 10, 0, 0)}
+        ]
+
+        with self.assertRaises(ValueError):
+            sync_stream(self.config, self.state, self.table_spec, self.stream, self.sync_start_time)
+
 
 class TestSyncTableFile(unittest.TestCase):
 

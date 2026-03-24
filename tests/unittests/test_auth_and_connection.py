@@ -11,7 +11,15 @@ from google.api_core.exceptions import (
     GatewayTimeout,
     TooManyRequests,
 )
-from tap_google_cloud_storage.exceptions import GCSServiceUnavailableError
+from tap_google_cloud_storage.exceptions import (
+    GCSBackoffError,
+    GCSConnectionError,
+    GCSConnectionResetError,
+    GCSRateLimitError,
+    GCSServiceUnavailableError,
+    RAW_EXCEPTIONS,
+    raise_for_error,
+)
 
 def _patch_backoff_sleep():
     """Patch backoff's sleep so retries run instantly in tests."""
@@ -444,6 +452,28 @@ class TestConnectionRetry(unittest.TestCase):
 
         # Should only be called once - no retries for non-retryable errors
         self.assertEqual(mock_blob.download_as_bytes.call_count, 1)
+
+
+class TestExceptionTranslation(unittest.TestCase):
+
+    def test_rate_limit_error_is_backoff_error(self):
+        """Test that 429 errors are treated as backoff errors."""
+        self.assertTrue(issubclass(GCSRateLimitError, GCSBackoffError))
+
+    def test_raw_exceptions_exclude_builtin_connection_errors(self):
+        """Test built-in connection errors are not swallowed by generic GCS catches."""
+        self.assertNotIn(ConnectionError, RAW_EXCEPTIONS)
+        self.assertNotIn(ConnectionResetError, RAW_EXCEPTIONS)
+
+    def test_raise_for_error_prefers_connection_reset_translation(self):
+        """Test ConnectionResetError is translated to the more specific custom error."""
+        with self.assertRaises(GCSConnectionResetError):
+            raise_for_error(ConnectionResetError('connection reset'))
+
+    def test_raise_for_error_translates_connection_error(self):
+        """Test ConnectionError still translates when explicitly passed in."""
+        with self.assertRaises(GCSConnectionError):
+            raise_for_error(ConnectionError('connection failed'))
 
 
 if __name__ == '__main__':

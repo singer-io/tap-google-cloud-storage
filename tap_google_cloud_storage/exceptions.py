@@ -41,7 +41,7 @@ class GCSGatewayTimeoutError(GCSBackoffError):
     pass
 
 
-class GCSRateLimitError(GCSError):
+class GCSRateLimitError(GCSBackoffError):
     """Class representing 429 status code."""
     pass
 
@@ -78,18 +78,21 @@ ERROR_CODE_EXCEPTION_MAPPING = {
         "raise_exception": GCSRateLimitError,
         "message": "The API rate limit has been exceeded."
     },
-    ConnectionError: {
-        "raise_exception": GCSConnectionError,
-        "message": "A connection error occurred."
-    },
     ConnectionResetError: {
         "raise_exception": GCSConnectionResetError,
         "message": "The connection was reset."
     },
+    ConnectionError: {
+        "raise_exception": GCSConnectionError,
+        "message": "A connection error occurred."
+    },
 }
 
 # Tuple of raw exceptions to catch before translating
-RAW_EXCEPTIONS = tuple(ERROR_CODE_EXCEPTION_MAPPING.keys())
+RAW_EXCEPTIONS = tuple(
+    exc_type for exc_type in ERROR_CODE_EXCEPTION_MAPPING.keys()
+    if issubclass(exc_type, GoogleAPICallError)
+)
 
 
 def raise_for_error(ex):

@@ -1,7 +1,8 @@
 import unittest
 import json
+from tap_google_cloud_storage import validate_table_config
 from tap_google_cloud_storage.config import CONFIG_CONTRACT
-from voluptuous import Invalid, MultipleInvalid
+from voluptuous import MultipleInvalid
 
 
 class TestConfigValidation(unittest.TestCase):
@@ -53,15 +54,15 @@ class TestConfigValidation(unittest.TestCase):
         with self.assertRaises(MultipleInvalid):
             CONFIG_CONTRACT(invalid_config)
 
-    def test_config_missing_required_key_properties(self):
-        """Test that config fails without key_properties"""
-        invalid_config = [{
+    def test_config_missing_key_properties_defaults_to_empty_list(self):
+        """Test that missing key_properties defaults to an empty list"""
+        config = [{
             'table_name': 'my_table',
             'search_pattern': '.*\\.csv'
         }]
 
-        with self.assertRaises(MultipleInvalid):
-            CONFIG_CONTRACT(invalid_config)
+        result = CONFIG_CONTRACT(config)
+        self.assertEqual(result[0]['key_properties'], [])
 
     def test_config_with_multiple_tables(self):
         """Test that config supports multiple table configurations"""
@@ -106,6 +107,20 @@ class TestConfigValidation(unittest.TestCase):
 
 
 class TestConfigNormalizationHelpers(unittest.TestCase):
+
+    def test_validate_table_config_adds_missing_key_properties(self):
+        """Test normalize step fills in missing key_properties before validation"""
+        config = {
+            'tables': json.dumps([
+                {
+                    'table_name': 'my_table',
+                    'search_pattern': '.*\\.csv'
+                }
+            ])
+        }
+
+        tables = validate_table_config(config)
+        self.assertEqual(tables[0]['key_properties'], [])
 
     def test_parse_tables_from_json_string(self):
         """Test parsing tables configuration from JSON string"""

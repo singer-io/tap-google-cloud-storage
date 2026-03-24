@@ -28,6 +28,16 @@ def stream_is_selected(mdata_map):
     return mdata_map.get((), {}).get('selected', False)
 
 
+def get_timezone_aware_last_modified(gcs_file):
+    """Return a validated, timezone-aware last modified value for a GCS file."""
+    last_modified = gcs_file['last_modified']
+    if last_modified.tzinfo is None or last_modified.utcoffset() is None:
+        raise ValueError(
+            f"GCS blob timestamp must be timezone-aware, got: {last_modified}"
+        )
+    return last_modified
+
+
 def sync_stream(config, state, table_spec, stream, sync_start_time):
     table_name = table_spec['table_name']
     modified_since = singer_utils.strptime_with_tz(
@@ -37,14 +47,17 @@ def sync_stream(config, state, table_spec, stream, sync_start_time):
     LOGGER.info('Syncing table "%s".', table_name)
     LOGGER.info('Getting files modified since %s.', modified_since)
 
-    gcs_files = gcs.get_input_files_for_table(config, table_spec, modified_since)
+    gcs_files = list(gcs.get_input_files_for_table(config, table_spec, modified_since))
+    for gcs_file in gcs_files:
+        get_timezone_aware_last_modified(gcs_file)
 
     records_streamed = 0
 
     for gcs_file in sorted(gcs_files, key=lambda item: item['last_modified']):
+        last_modified = get_timezone_aware_last_modified(gcs_file)
         records_streamed += sync_table_file(config, gcs_file['key'], table_spec, stream)
-        if gcs_file['last_modified'] < sync_start_time:
-            state = singer.write_bookmark(state, table_name, 'modified_since', gcs_file['last_modified'].isoformat())
+        if last_modified < sync_start_time:
+            state = singer.write_bookmark(state, table_name, 'modified_since', last_modified.isoformat())
         else:
             state = singer.write_bookmark(state, table_name, 'modified_since', sync_start_time.isoformat())
         singer.write_state(state)

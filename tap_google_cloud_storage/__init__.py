@@ -4,7 +4,7 @@ import json
 import sys
 import singer
 
-from datetime import datetime
+from datetime import datetime, timezone
 from singer import utils as singer_utils
 from singer import metadata
 from tap_google_cloud_storage import gcs
@@ -72,7 +72,7 @@ def validate_table_config(config):
             table_config.pop('search_prefix', None)
 
         # Normalize key_properties to list
-        if table_config.get('key_properties') == "" or table_config.get('key_properties') is None:
+        if 'key_properties' not in table_config or table_config.get('key_properties') == "" or table_config.get('key_properties') is None:
             table_config['key_properties'] = []
         elif isinstance(table_config.get('key_properties'), str):
             table_config['key_properties'] = [s.strip() for s in table_config['key_properties'].split(',')]
@@ -104,8 +104,7 @@ def main():
         LOGGER.error("Unable to access GCS bucket")
         raise
 
-    now_str = datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
-    sync_start_time = singer_utils.strptime_with_tz(now_str)
+    sync_start_time = datetime.now(timezone.utc)
 
     if args.discover:
         do_discover(config)
