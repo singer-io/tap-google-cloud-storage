@@ -640,12 +640,12 @@ def get_sampled_schema_for_table(config, table_spec):
         }
 
     metadata_schema = {
-        SDC_SOURCE_BUCKET_COLUMN: {'type': 'string'},
-        SDC_SOURCE_FILE_COLUMN: {'type': 'string'},
-        SDC_SOURCE_LINENO_COLUMN: {'type': 'integer'},
+        SDC_SOURCE_BUCKET_COLUMN: {'type': ['null', 'string']},
+        SDC_SOURCE_FILE_COLUMN: {'type': ['null', 'string']},
+        SDC_SOURCE_LINENO_COLUMN: {'type': ['null', 'integer']},
         SDC_EXTRA_COLUMN: {
             'type': ['null', 'array'],
-            'items': {'type': 'object', 'properties': {}}
+            'items': {'type': 'object', 'properties': {}, 'additionalProperties': True}
         }
     }
 
@@ -653,5 +653,6 @@ def get_sampled_schema_for_table(config, table_spec):
 
     return {
         'type': 'object',
-        'properties': {**data_schema, **metadata_schema}
+        'properties': {**data_schema, **metadata_schema},
+        'additionalProperties': False
     }
