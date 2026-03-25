@@ -49,7 +49,13 @@ SERVICE_ACCOUNT_FIELDS = (
 
 
 def get_service_account_info(config):
-    """Return only the service account fields needed by Google clients."""
+    """Return normalized service account info for Google clients.
+
+    If ``service_account_info`` is provided in the config, all of its fields
+    are preserved and returned, with required defaults (such as ``token_uri``)
+    added when missing and the private key normalized. If it is not provided,
+    a minimal service account info dict is built from ``SERVICE_ACCOUNT_FIELDS``.
+    """
     service_account_info = dict(config.get('service_account_info') or {})
     if not service_account_info:
         service_account_info = {
