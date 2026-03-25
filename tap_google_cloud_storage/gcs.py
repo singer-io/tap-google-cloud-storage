@@ -40,6 +40,34 @@ SDC_SOURCE_FILE_COLUMN = "_sdc_source_file"
 SDC_SOURCE_LINENO_COLUMN = "_sdc_source_lineno"
 SDC_EXTRA_COLUMN = "_sdc_extra"
 
+SERVICE_ACCOUNT_FIELDS = (
+    'type',
+    'project_id',
+    'client_email',
+    'private_key',
+)
+
+
+def get_service_account_info(config):
+    """Return only the service account fields needed by Google clients."""
+    service_account_info = dict(config.get('service_account_info') or {})
+    if not service_account_info:
+        service_account_info = {
+            key: config[key]
+            for key in SERVICE_ACCOUNT_FIELDS
+            if key in config
+        }
+
+    if 'token_uri' not in service_account_info:
+        service_account_info['token_uri'] = 'https://oauth2.googleapis.com/token'
+
+    private_key = service_account_info.get('private_key')
+    if private_key and '\\n' in private_key:
+        service_account_info['private_key'] = private_key.replace('\\n', '\n')
+
+    return service_account_info
+
+
 def _read_exact(fp, n):
     """Read exactly n bytes from file pointer.
     Helper function for reading gzip headers.
@@ -114,13 +142,11 @@ def get_file_name_from_gzfile(filename=None, fileobj=None):
 )
 def setup_gcs_client(config):
     """
-    Create and return a GCS client using the config directly as service account JSON.
+    Create and return a GCS client using only service account fields.
     """
     try:
-        # Add token_uri if not present (hardcoded constant for Google OAuth2)
-        if 'token_uri' not in config:
-            config['token_uri'] = 'https://oauth2.googleapis.com/token'
-        client = storage.Client.from_service_account_info(config)
+        service_account_info = get_service_account_info(config)
+        client = storage.Client.from_service_account_info(service_account_info)
         return client
     except RAW_EXCEPTIONS as e:
         raise_for_error(e)
@@ -137,8 +163,11 @@ def setup_gcsfs_client(config):
     if fs is None:
         try:
             LOGGER.info('Creating GCS filesystem client for streaming Parquet/Avro')
-            # gcsfs can use the same service account credentials
-            fs = gcsfs.GCSFileSystem(token=config, project=config.get('project_id'))
+            service_account_info = get_service_account_info(config)
+            fs = gcsfs.GCSFileSystem(
+                token=service_account_info,
+                project=service_account_info.get('project_id')
+            )
         except Exception as e:
             LOGGER.error("Failed to create GCS filesystem client: %s", e)
             raise

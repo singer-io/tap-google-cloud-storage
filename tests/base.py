@@ -26,28 +26,6 @@ class GCSBaseTest(unittest.TestCase):
         """The connection type for tap-tester"""
         return "platform.google-cloud-storage"
 
-    @staticmethod
-    def get_credentials():
-        """
-        GCS credentials from environment variables.
-        Required environment variables:
-        - TAP_GCS_PROJECT_ID
-        - TAP_GCS_PRIVATE_KEY
-        - TAP_GCS_CLIENT_EMAIL
-        """
-        # Get private key and replace literal \n with actual newlines
-        private_key = os.getenv('TAP_GCS_PRIVATE_KEY', '')
-        if private_key and '\\n' in private_key:
-            private_key = private_key.replace('\\n', '\n')
-
-        credentials_dict = {
-            'project_id': os.getenv('TAP_GCS_PROJECT_ID'),
-            'private_key': private_key,
-            'client_email': os.getenv('TAP_GCS_CLIENT_EMAIL')
-        }
-
-        return credentials_dict
-
     def get_properties(self, original: bool = True):
         """
         Get the configuration properties for the tap.
@@ -56,9 +34,24 @@ class GCSBaseTest(unittest.TestCase):
             original (bool): If True, return default properties. If False, use START_DATE.
 
         Returns:
-            dict: Configuration properties including bucket and tables
+            dict: Configuration properties including service_account_json, bucket and tables
         """
+        # Get private key and replace literal \n with actual newlines
+        private_key = os.getenv('TAP_GCS_PRIVATE_KEY', '')
+        if private_key and '\\n' in private_key:
+            private_key = private_key.replace('\\n', '\n')
+
+        # Build service_account_json from environment variables
+        service_account_json = {
+            'type': 'service_account',
+            'project_id': os.getenv('TAP_GCS_PROJECT_ID'),
+            'private_key': private_key,
+            'client_email': os.getenv('TAP_GCS_CLIENT_EMAIL'),
+            'token_uri': 'https://oauth2.googleapis.com/token'
+        }
+
         props = {
+            'service_account_json': json.dumps(service_account_json),
             'start_date': os.getenv('TAP_GCS_START_DATE', '2021-11-02T00:00:00Z'),
             'bucket': os.getenv('TAP_GCS_BUCKET', 'tap-gcs-test-bucket'),
             'tables': json.dumps(self.table_entry)

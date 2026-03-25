@@ -48,7 +48,13 @@ class TestGCSAuthentication(unittest.TestCase):
         client = gcs.setup_gcs_client(config)
 
         self.assertIsNotNone(client)
-        mock_client.assert_called_once_with(config)
+        mock_client.assert_called_once_with({
+            'type': 'service_account',
+            'project_id': 'test-project',
+            'client_email': 'test@test.iam.gserviceaccount.com',
+            'private_key': '-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----\n',
+            'token_uri': 'https://oauth2.googleapis.com/token',
+        })
 
     @patch('google.cloud.storage.Client.from_service_account_info')
     def test_authentication_failure_with_invalid_credentials(self, mock_client):
@@ -79,6 +85,37 @@ class TestGCSAuthentication(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             gcs.setup_gcs_client(config)
+
+    @patch('google.cloud.storage.Client.from_service_account_info')
+    def test_authentication_uses_service_account_info_only(self, mock_client):
+        """Test nested service account info is passed through without tap config fields."""
+        from tap_google_cloud_storage import gcs
+
+        mock_client.return_value = MagicMock()
+
+        config = {
+            'service_account_info': {
+                'type': 'service_account',
+                'project_id': 'test-project',
+                'private_key': '-----BEGIN PRIVATE KEY-----\\ntest\\n-----END PRIVATE KEY-----\\n',
+                'client_email': 'test@test.iam.gserviceaccount.com',
+                'token_uri': 'https://oauth2.googleapis.com/token',
+                'private_key_id': 'key123'
+            },
+            'bucket': 'test-bucket',
+            'tables': []
+        }
+
+        gcs.setup_gcs_client(config)
+
+        mock_client.assert_called_once_with({
+            'type': 'service_account',
+            'project_id': 'test-project',
+            'client_email': 'test@test.iam.gserviceaccount.com',
+            'private_key': '-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----\n',
+            'token_uri': 'https://oauth2.googleapis.com/token',
+            'private_key_id': 'key123'
+        })
 
 
 class TestGCSConnection(unittest.TestCase):
