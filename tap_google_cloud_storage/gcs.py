@@ -72,9 +72,11 @@ def get_service_account_info(config):
         if key in service_account_info
     }
 
-    # Preserve existing token_uri or add default
+    # Preserve existing token_uri from nested info or flat fallback config, else add default
     if 'token_uri' in service_account_info:
         filtered_info['token_uri'] = service_account_info['token_uri']
+    elif 'token_uri' in config:
+        filtered_info['token_uri'] = config['token_uri']
     else:
         filtered_info['token_uri'] = 'https://oauth2.googleapis.com/token'
 

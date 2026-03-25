@@ -159,6 +159,19 @@ class TestGetServiceAccountInfo(unittest.TestCase):
         result = self.gcs.get_service_account_info(config)
         self.assertEqual(result['token_uri'], DEFAULT_TOKEN_URI)
 
+    def test_fallback_preserves_top_level_token_uri_from_flat_config(self):
+        """Flat-config top-level token_uri should be preserved when service_account_info is absent."""
+        custom_uri = 'https://custom.token.endpoint/token'
+        config = {
+            'type': 'service_account',
+            'project_id': 'my-project',
+            'client_email': 'sa@my-project.iam.gserviceaccount.com',
+            'private_key': 'key',
+            'token_uri': custom_uri,
+        }
+        result = self.gcs.get_service_account_info(config)
+        self.assertEqual(result['token_uri'], custom_uri)
+
     def test_service_account_info_takes_priority_over_flat_config_fields(self):
         """service_account_info beats conflicting flat-config fields."""
         config = {
