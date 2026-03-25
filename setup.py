@@ -11,7 +11,7 @@ setup(name='tap-google-cloud-storage',
       install_requires=[
           'backoff==2.2.1',
           'urllib3==2.6.3',
-          'singer-encodings==0.4.0',
+          'singer-encodings==0.5.0',
           'singer-python==6.8.0',
           'google-cloud-storage==3.7.0',
           'gcsfs==2024.10.0',
