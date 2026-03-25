@@ -3,7 +3,7 @@
 from setuptools import setup
 
 setup(name='tap-google-cloud-storage',
-      version='0.0.2',
+      version='0.0.1',
       description='Singer tap for extracting files from Google Cloud Storage',
       author='Stitch',
       url='https://singer.io',
