@@ -51,27 +51,38 @@ SERVICE_ACCOUNT_FIELDS = (
 def get_service_account_info(config):
     """Return normalized service account info for Google clients.
 
-    If ``service_account_info`` is provided in the config, all of its fields
-    are preserved and returned, with required defaults (such as ``token_uri``)
+    If ``service_account_info`` is provided in the config, extracts only the
+    required service account fields, with required defaults (such as ``token_uri``)
     added when missing and the private key normalized. If it is not provided,
-    a minimal service account info dict is built from ``SERVICE_ACCOUNT_FIELDS``.
+    a fallback payload is built from ``SERVICE_ACCOUNT_FIELDS``.
     """
     service_account_info = dict(config.get('service_account_info') or {})
     if not service_account_info:
+        # Fallback: extract only required service account fields
         service_account_info = {
             key: config[key]
             for key in SERVICE_ACCOUNT_FIELDS
             if key in config
         }
 
-    if 'token_uri' not in service_account_info:
-        service_account_info['token_uri'] = 'https://oauth2.googleapis.com/token'
+    # Extract only required fields to prevent extra fields from leaking to Google
+    filtered_info = {
+        key: service_account_info[key]
+        for key in SERVICE_ACCOUNT_FIELDS
+        if key in service_account_info
+    }
 
-    private_key = service_account_info.get('private_key')
+    # Preserve existing token_uri or add default
+    if 'token_uri' in service_account_info:
+        filtered_info['token_uri'] = service_account_info['token_uri']
+    else:
+        filtered_info['token_uri'] = 'https://oauth2.googleapis.com/token'
+
+    private_key = filtered_info.get('private_key')
     if private_key and '\\n' in private_key:
-        service_account_info['private_key'] = private_key.replace('\\n', '\n')
+        filtered_info['private_key'] = private_key.replace('\\n', '\n')
 
-    return service_account_info
+    return filtered_info
 
 
 def _read_exact(fp, n):

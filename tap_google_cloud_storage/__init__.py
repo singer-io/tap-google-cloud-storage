@@ -85,19 +85,30 @@ def validate_table_config(config):
     return CONFIG_CONTRACT(tables)
 
 
+def parse_service_account_json(config):
+    """Parse service_account_json (string or dict) and store as service_account_info.
+
+    Args:
+        config: Configuration dict containing service_account_json field
+
+    Raises:
+        json.JSONDecodeError: If service_account_json is a string but not valid JSON
+    """
+    service_account_json = config.get('service_account_json')
+    if service_account_json:
+        if isinstance(service_account_json, str):
+            config['service_account_info'] = json.loads(service_account_json)
+        else:
+            config['service_account_info'] = service_account_json
+
+
 @singer_utils.handle_top_exception(LOGGER)
 def main():
     args = singer_utils.parse_args(REQUIRED_CONFIG_KEYS)
     config = args.config
 
-    # Parse service_account_json and store only auth fields separately
-    service_account_json = config.get('service_account_json')
-    if service_account_json:
-        if isinstance(service_account_json, str):
-            service_account_info = json.loads(service_account_json)
-        else:
-            service_account_info = service_account_json
-        config['service_account_info'] = service_account_info
+    # Parse service_account_json and store as service_account_info
+    parse_service_account_json(config)
 
     # Validate and normalize table configuration
     config['tables'] = validate_table_config(config)

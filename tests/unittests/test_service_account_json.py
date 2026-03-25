@@ -98,15 +98,24 @@ class TestGetServiceAccountInfo(unittest.TestCase):
         result = self.gcs.get_service_account_info(config)
         self.assertEqual(result['private_key'], _VALID_SA_DICT['private_key'])
 
-    def test_extra_fields_in_service_account_info_are_preserved(self):
-        """Unknown extra fields (client_id, auth_uri …) pass through unchanged."""
+    def test_extra_fields_in_service_account_info_are_filtered_out(self):
+        """Unknown extra fields (client_id, auth_uri …) are filtered out, only required fields pass."""
         sa = dict(_VALID_SA_DICT)
         sa['client_id'] = '999'
         sa['auth_uri'] = 'https://accounts.google.com/o/oauth2/auth'
+        sa['private_key_id'] = 'key-id-123'
         config = {'service_account_info': sa}
         result = self.gcs.get_service_account_info(config)
-        self.assertEqual(result['client_id'], '999')
-        self.assertEqual(result['auth_uri'], 'https://accounts.google.com/o/oauth2/auth')
+        # Only required fields should be present
+        self.assertIn('type', result)
+        self.assertIn('project_id', result)
+        self.assertIn('client_email', result)
+        self.assertIn('private_key', result)
+        self.assertIn('token_uri', result)
+        # Extra fields should NOT appear
+        self.assertNotIn('client_id', result)
+        self.assertNotIn('auth_uri', result)
+        self.assertNotIn('private_key_id', result)
 
     def test_tap_config_fields_do_not_leak_into_service_account_info(self):
         """bucket, tables, start_date etc. must NOT appear in the returned info."""
@@ -222,14 +231,10 @@ class TestMainServiceAccountJsonParsing(unittest.TestCase):
     """Tests for the service_account_json → service_account_info conversion in main()."""
 
     def _run_parse(self, service_account_json_value):
-        """Helper: feed the value through the parsing block in main() and return config."""
+        """Helper: Use production code's parse_service_account_json() function."""
+        from tap_google_cloud_storage import parse_service_account_json
         config = {'service_account_json': service_account_json_value}
-        sa = config.get('service_account_json')
-        if sa:
-            if isinstance(sa, str):
-                config['service_account_info'] = json.loads(sa)
-            else:
-                config['service_account_info'] = sa
+        parse_service_account_json(config)
         return config
 
     # --- Positive: dict (object in config.json) ---
@@ -380,16 +385,24 @@ class TestSetupGcsClientServiceAccountJson(unittest.TestCase):
         self.assertEqual(call_args['private_key'], _VALID_SA_DICT['private_key'])
 
     @patch('google.cloud.storage.Client.from_service_account_info')
-    def test_extra_service_account_fields_pass_through(self, mock_client):
-        """Extra fields like client_id, auth_uri are forwarded to Google unchanged."""
+    def test_extra_service_account_fields_are_filtered_out(self, mock_client):
+        """Extra fields like client_id are filtered out, only required fields passed to Google."""
         mock_client.return_value = MagicMock()
         sa = dict(_VALID_SA_DICT)
         sa['client_id'] = 'abc123'
+        sa['private_key_id'] = 'key-id'
         config = self._make_config(sa)
         self.gcs.setup_gcs_client(config)
 
         call_args = mock_client.call_args[0][0]
-        self.assertEqual(call_args['client_id'], 'abc123')
+        # Required fields should be present
+        self.assertIn('type', call_args)
+        self.assertIn('project_id', call_args)
+        self.assertIn('client_email', call_args)
+        self.assertIn('private_key', call_args)
+        # Extra fields should NOT be present
+        self.assertNotIn('client_id', call_args)
+        self.assertNotIn('private_key_id', call_args)
 
     @patch('google.cloud.storage.Client.from_service_account_info')
     def test_returns_google_client_object(self, mock_client):
@@ -431,14 +444,10 @@ class TestServiceAccountJsonFormatCompliance(unittest.TestCase):
         self.gcs = gcs
 
     def _parse_and_get_info(self, service_account_json_value):
-        """Simulate the main() parsing block and return service_account_info."""
-        config = {}
-        sa = service_account_json_value
-        if sa:
-            if isinstance(sa, str):
-                config['service_account_info'] = json.loads(sa)
-            else:
-                config['service_account_info'] = sa
+        """Use production code's parse_service_account_json() function."""
+        from tap_google_cloud_storage import parse_service_account_json
+        config = {'service_account_json': service_account_json_value}
+        parse_service_account_json(config)
         return config.get('service_account_info', {})
 
     def test_dict_and_json_string_produce_identical_service_account_info(self):
