@@ -88,7 +88,7 @@ class TestGCSAuthentication(unittest.TestCase):
 
     @patch('google.cloud.storage.Client.from_service_account_info')
     def test_authentication_uses_service_account_info_only(self, mock_client):
-        """Test nested service account info is passed through without tap config fields."""
+        """Test only required service account fields are passed to Google, extra fields filtered."""
         from tap_google_cloud_storage import gcs
 
         mock_client.return_value = MagicMock()
@@ -100,7 +100,6 @@ class TestGCSAuthentication(unittest.TestCase):
                 'private_key': '-----BEGIN PRIVATE KEY-----\\ntest\\n-----END PRIVATE KEY-----\\n',
                 'client_email': 'test@test.iam.gserviceaccount.com',
                 'token_uri': 'https://oauth2.googleapis.com/token',
-                'private_key_id': 'key123'
             },
             'bucket': 'test-bucket',
             'tables': []
@@ -114,7 +113,6 @@ class TestGCSAuthentication(unittest.TestCase):
             'client_email': 'test@test.iam.gserviceaccount.com',
             'private_key': '-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----\n',
             'token_uri': 'https://oauth2.googleapis.com/token',
-            'private_key_id': 'key123'
         })
 
 
