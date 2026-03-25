@@ -62,6 +62,14 @@ class GCSBaseTest(unittest.TestCase):
         props['start_date'] = self.START_DATE
         return props
 
+    def get_credentials(self):
+        """
+        Return credential-specific properties for the tap.
+        All authentication details are already embedded in get_properties()
+        via service_account_json, so this returns an empty dict.
+        """
+        return {}
+
     def expected_pks(self):
         """
         Return expected primary keys for each stream.
