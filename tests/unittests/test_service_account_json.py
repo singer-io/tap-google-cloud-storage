@@ -223,7 +223,6 @@ class TestMainServiceAccountJsonParsing(unittest.TestCase):
 
     def _run_parse(self, service_account_json_value):
         """Helper: feed the value through the parsing block in main() and return config."""
-        import tap_google_cloud_storage as tap
         config = {'service_account_json': service_account_json_value}
         sa = config.get('service_account_json')
         if sa:
