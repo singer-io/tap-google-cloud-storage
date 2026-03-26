@@ -104,7 +104,7 @@ def handle_file(config, gcs_path, table_spec, stream, extension, file_handler=No
     # This handles files like gz_stored_as_csv.csv which are gzipped but have .csv extension
     if extension in ["csv", "txt", "tsv", "psv", "jsonl"] and not file_handler:
         # For files without a handler (not from zip), check if they're secretly gzipped
-        file_handle = gcs.get_gcsfs_file_handle(config, gcs_path)
+        file_handle = gcs.get_file_handle(config, gcs_path)
         if file_handle:
             # Read first 2 bytes to check for gzip magic number
             peek_data = file_handle.read(2)
@@ -167,7 +167,7 @@ def handle_file(config, gcs_path, table_spec, stream, extension, file_handler=No
 def sync_gz_file(config, gcs_path, table_spec, stream, file_handler=None):
     """Handle .gz files by reading the original filename from gzip header."""
     # If file is extracted from zip use file object else get file object from GCS bucket
-    file_object = file_handler if file_handler else gcs.get_gcsfs_file_handle(config, gcs_path)
+    file_object = file_handler if file_handler else gcs.get_file_handle(config, gcs_path)
     if file_object is None:
         return 0
 
@@ -202,8 +202,7 @@ def sync_compressed_file(config, gcs_path, table_spec, stream):
     LOGGER.info('Syncing Compressed file "%s".', gcs_path)
 
     records_streamed = 0
-    # Use gcsfs for streaming compressed files
-    file_handle = gcs.get_gcsfs_file_handle(config, gcs_path)
+    file_handle = gcs.get_file_handle(config, gcs_path)
     if file_handle is None:
         return 0
 

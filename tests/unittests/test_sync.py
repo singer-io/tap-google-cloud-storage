@@ -1,7 +1,17 @@
+import io
 import unittest
 from unittest.mock import patch, MagicMock, call
 from datetime import datetime, timezone
-from tap_google_cloud_storage.sync import stream_is_selected, sync_stream, sync_table_file
+import gzip
+
+from tap_google_cloud_storage.sync import (
+    handle_file,
+    stream_is_selected,
+    sync_compressed_file,
+    sync_gz_file,
+    sync_stream,
+    sync_table_file,
+)
 
 
 class TestSyncHelpers(unittest.TestCase):
@@ -200,6 +210,69 @@ class TestSyncTableFile(unittest.TestCase):
         result = sync_table_file(self.config, 'exports/data.pdf', self.table_spec, self.stream)
 
         self.assertEqual(result, 0)
+
+
+class TestCompressedSync(unittest.TestCase):
+
+    def setUp(self):
+        self.config = {'bucket': 'test-bucket'}
+        self.table_spec = {
+            'table_name': 'my_table',
+            'key_properties': ['id']
+        }
+        self.stream = {
+            'tap_stream_id': 'my_table',
+            'schema': {'type': 'object', 'properties': {}}
+        }
+
+    @patch('tap_google_cloud_storage.sync.handle_file')
+    @patch('tap_google_cloud_storage.gcs.get_file_handle')
+    def test_sync_gz_file_uses_standard_file_handle(self, mock_get_file_handle, mock_handle_file):
+        """Test gzip sync uses the standard GCS handle and processes extracted content."""
+        gz_bytes = io.BytesIO()
+        with gzip.GzipFile(filename='data.csv', fileobj=gz_bytes, mode='wb') as gz_file:
+            gz_file.write(b'id,name\n1,Alice\n')
+
+        mock_get_file_handle.return_value = io.BytesIO(gz_bytes.getvalue())
+        mock_handle_file.return_value = 1
+
+        result = sync_gz_file(self.config, 'exports/data.gz', self.table_spec, self.stream)
+
+        self.assertEqual(result, 1)
+        mock_get_file_handle.assert_called_once_with(self.config, 'exports/data.gz')
+        mock_handle_file.assert_called_once()
+        self.assertEqual(mock_handle_file.call_args[0][4], 'csv')
+
+    @patch('tap_google_cloud_storage.sync.compression.infer')
+    @patch('tap_google_cloud_storage.sync.handle_file')
+    @patch('tap_google_cloud_storage.gcs.get_file_handle')
+    def test_sync_compressed_file_uses_standard_file_handle(self, mock_get_file_handle, mock_handle_file, mock_infer):
+        """Test zip sync uses the standard GCS handle and processes extracted files."""
+        extracted = MagicMock()
+        extracted.name = 'data.jsonl'
+        mock_infer.return_value = [extracted]
+        mock_get_file_handle.return_value = io.BytesIO(b'zip-bytes')
+        mock_handle_file.return_value = 2
+
+        result = sync_compressed_file(self.config, 'exports/data.zip', self.table_spec, self.stream)
+
+        self.assertEqual(result, 2)
+        mock_get_file_handle.assert_called_once_with(self.config, 'exports/data.zip')
+        mock_handle_file.assert_called_once()
+        self.assertEqual(mock_handle_file.call_args[0][4], 'jsonl')
+
+    @patch('tap_google_cloud_storage.sync.sync_gz_file')
+    @patch('tap_google_cloud_storage.gcs.get_file_handle')
+    def test_handle_file_detects_gzip_content_with_standard_handle(self, mock_get_file_handle, mock_sync_gz_file):
+        """Test disguised gzip files are detected using the standard GCS handle."""
+        mock_get_file_handle.return_value = io.BytesIO(b'\x1f\x8brest')
+        mock_sync_gz_file.return_value = 3
+
+        result = handle_file(self.config, 'exports/data.csv', self.table_spec, self.stream, 'csv')
+
+        self.assertEqual(result, 3)
+        mock_get_file_handle.assert_called_once_with(self.config, 'exports/data.csv')
+        mock_sync_gz_file.assert_called_once_with(self.config, 'exports/data.csv', self.table_spec, self.stream)
 
 
 class TestSyncIncremental(unittest.TestCase):
