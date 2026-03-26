@@ -9,6 +9,7 @@ import itertools
 import singer
 import backoff
 from google.cloud import storage
+from google.oauth2 import service_account
 import gcsfs
 from singer_encodings import (
     csv as singer_csv,
@@ -150,8 +151,18 @@ def setup_gcsfs_client(config):
         try:
             config = _normalize_service_account_config(config)
             LOGGER.info('Creating GCS filesystem client for streaming Parquet/Avro')
-            # gcsfs can use the same service account credentials
-            fs = gcsfs.GCSFileSystem(token=config, project=config.get('project_id'))
+            if 'token_uri' not in config:
+                config['token_uri'] = 'https://oauth2.googleapis.com/token'
+
+            credentials = service_account.Credentials.from_service_account_info(
+                config,
+                scopes=['https://www.googleapis.com/auth/devstorage.read_only']
+            )
+
+            fs = gcsfs.GCSFileSystem(
+                project=config.get('project_id'),
+                token=credentials
+            )
         except Exception as e:
             LOGGER.error("Failed to create GCS filesystem client: %s", e)
             raise
