@@ -40,6 +40,17 @@ SDC_SOURCE_FILE_COLUMN = "_sdc_source_file"
 SDC_SOURCE_LINENO_COLUMN = "_sdc_source_lineno"
 SDC_EXTRA_COLUMN = "_sdc_extra"
 
+
+def _normalize_service_account_config(config):
+    """Return a copy of config with a normalized private key for Google auth."""
+    normalized_config = dict(config)
+
+    private_key = normalized_config.get('private_key')
+    if private_key and '\\n' in private_key:
+        normalized_config['private_key'] = private_key.replace('\\n', '\n')
+
+    return normalized_config
+
 def _read_exact(fp, n):
     """Read exactly n bytes from file pointer.
     Helper function for reading gzip headers.
@@ -117,6 +128,7 @@ def setup_gcs_client(config):
     Create and return a GCS client using the config directly as service account JSON.
     """
     try:
+        config = _normalize_service_account_config(config)
         # Add token_uri if not present (hardcoded constant for Google OAuth2)
         if 'token_uri' not in config:
             config['token_uri'] = 'https://oauth2.googleapis.com/token'
@@ -136,6 +148,7 @@ def setup_gcsfs_client(config):
     global fs
     if fs is None:
         try:
+            config = _normalize_service_account_config(config)
             LOGGER.info('Creating GCS filesystem client for streaming Parquet/Avro')
             # gcsfs can use the same service account credentials
             fs = gcsfs.GCSFileSystem(token=config, project=config.get('project_id'))
