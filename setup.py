@@ -13,9 +13,9 @@ setup(name='tap-google-cloud-storage',
           'urllib3==2.6.3',
           'singer-encodings==0.5.0',
           'singer-python==6.8.0',
-          'google-cloud-storage==3.7.0',
-          'gcsfs==2024.10.0',
-          'voluptuous==0.15.2'
+          'google-cloud-storage==3.10.1',
+          'gcsfs==2026.3.0',
+          'voluptuous==0.16.0'
       ],
       extras_require={
           'dev': [
