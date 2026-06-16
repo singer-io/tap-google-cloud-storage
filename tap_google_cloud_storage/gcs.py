@@ -276,7 +276,16 @@ def _iter_matching_blobs(config, table_spec):
     root = config.get('root_path', '') or ''
     effective_prefix = f"{root}{search_prefix}" if root else search_prefix
     pattern = table_spec.get('search_pattern')
-    regex = re.compile(pattern) if pattern else None
+    if pattern:
+        try:
+            regex = re.compile(pattern)
+        except re.error as e:
+            raise ValueError(
+                f"Invalid search_pattern {pattern!r} for table "
+                f"'{table_spec.get('table_name')}': {e}."
+            ) from e
+    else:
+        regex = None
 
     for blob in list_files_in_bucket({**config, 'root_path': effective_prefix}):
         name = blob.name
