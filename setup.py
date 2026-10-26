@@ -3,14 +3,14 @@
 from setuptools import setup
 
 setup(name='tap-google-cloud-storage',
-      version='0.0.3',
+      version='0.0.4',
       description='Singer tap for extracting files from Google Cloud Storage',
       author='Stitch',
       url='https://singer.io',
       classifiers=['Programming Language :: Python :: 3 :: Only'],
       install_requires=[
           'backoff==2.2.1',
-          'urllib3==2.7.0',
+          'urllib3==2.8.0',
           'singer-encodings==0.5.0',
           'singer-python==6.8.0',
           'google-cloud-storage==3.10.1',

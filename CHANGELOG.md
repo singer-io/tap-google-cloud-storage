@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.0.4
+  * Bump `urllib3` to 2.8.0 for security updates [#11](https://github.com/singer-io/tap-google-cloud-storage/pull/11)
+
 ## 0.0.3
   * Fix error message [#10](https://github.com/singer-io/tap-google-cloud-storage/pull/10)
 
