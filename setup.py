@@ -13,7 +13,7 @@ setup(name='tap-google-cloud-storage',
           'urllib3==2.8.0',
           'singer-encodings==0.5.0',
           'singer-python==6.8.0',
-          'google-cloud-storage==3.10.1',
+          'google-cloud-storage==3.17.1',
           'gcsfs==2026.10.1',
           'voluptuous==0.16.0'
       ],
